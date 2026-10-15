@@ -69,6 +69,10 @@ mod files {
     pub const WAIT: u8 = 0x0d;
     pub const PROFILES: u8 = 0x04;
     pub const BULK_READ: u8 = 0xff;
+    pub const OPEN_WRITE: u8 = 0x05;
+    pub const COMMIT: u8 = 0x09;
+    pub const FINISH: u8 = 0x0e;
+    pub const BULK_WRITE: u8 = 0x7f;
     /// Data bytes in one bulk packet, and packets per stream.
     pub const PACKET: usize = 60;
     pub const PACKETS: usize = 5;
@@ -356,6 +360,54 @@ impl Nightsword {
         }
         self.tell(&[WRITE, FIELD, CLOSE])?;
         Ok(data)
+    }
+
+    /// Replaces the file `name` in profile folder `folder` with `data`, the
+    /// same steps iCUE uses: open for writing, bulk-write in streams of up to
+    /// 5 x 60 bytes (each committed), close, finish. CHANGES THE MOUSE'S
+    /// MEMORY: callers back up first.
+    pub fn write_named(&self, api: &HidApi, folder: u8, name: &str, data: &[u8]) -> Result<()> {
+        use files::*;
+        if data.len() > MAX_FILE || name.is_empty() || name.len() > 12 || !name.is_ascii() {
+            return Err(Error::NotFound);
+        }
+        let answers = Self::open_buttons(api)?;
+        let enter: Vec<u8> = if folder == 0 { vec![WRITE, FIELD, ENTER] } else { vec![WRITE, FIELD, ENTER, folder] };
+        self.tell(&enter)?;
+        let mut open = vec![WRITE, FIELD, OPEN_WRITE, 0x00];
+        open.extend_from_slice(name.as_bytes());
+        self.tell(&open)?;
+        let result = (|| {
+            self.ask(&answers, &[READ, FIELD, WAIT], &[READ, FIELD, WAIT])?;
+            for stream in data.chunks(PACKET * PACKETS) {
+                for (i, packet) in stream.chunks(PACKET).enumerate() {
+                    let mut msg = vec![BULK_WRITE, i as u8 + 1, packet.len() as u8, 0x00];
+                    msg.extend_from_slice(packet);
+                    let mut q = [0u8; REPORT_LEN];
+                    q[1..1 + msg.len()].copy_from_slice(&msg);
+                    self.dev.write(&q)?;
+                }
+                self.tell(&[WRITE, FIELD, COMMIT])?;
+                self.ask(&answers, &[READ, FIELD, WAIT], &[READ, FIELD, WAIT])?;
+            }
+            Ok(())
+        })();
+        let _ = self.tell(&[WRITE, FIELD, CLOSE]);
+        let _ = self.tell(&[WRITE, FIELD, FINISH]);
+        let _ = self.ask(&answers, &[READ, FIELD, WAIT], &[READ, FIELD, WAIT]);
+        let _ = self.tell(&[WRITE, FIELD, ENTER]);
+        result
+    }
+
+    /// Reads one file by name from a profile folder. Read-only.
+    pub fn read_file(&self, api: &HidApi, folder: u8, name: &str) -> Result<Vec<u8>> {
+        let answers = Self::open_buttons(api)?;
+        let enter: Vec<u8> =
+            if folder == 0 { vec![WRITE, files::FIELD, files::ENTER] } else { vec![WRITE, files::FIELD, files::ENTER, folder] };
+        self.tell(&enter)?;
+        let r = self.read_named(&answers, name);
+        let _ = self.tell(&[WRITE, files::FIELD, files::ENTER]);
+        r
     }
 
     /// Reads every onboard file Prism knows the name of, from every profile

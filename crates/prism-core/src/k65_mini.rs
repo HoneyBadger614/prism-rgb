@@ -42,7 +42,15 @@ mod cmd {
     pub const READ: u8 = 0x08;
     pub const PROBE: u8 = 0x09;
     pub const OPEN: u8 = 0x0d;
+    pub const CONTINUE_WRITE: u8 = 0x07;
+    pub const CREATE_FILE: u8 = 0x0b;
+    pub const DELETE_FILE: u8 = 0x0c;
 }
+
+/// Files are written in blocks of this many bytes (like iCUE does). The first
+/// packet of a block carries this many, the continuation the rest.
+const WRITE_BLOCK: usize = 1024;
+const FIRST_PACKET_DATA: usize = 1024 - 7;
 
 /// Handle used for reading onboard files (lighting uses [`HANDLE`]).
 const FILE_HANDLE: u8 = 0x02;
@@ -220,6 +228,53 @@ impl K65Mini {
                 data.extend_from_slice(&d[3..3 + take]);
             }
             Ok(data)
+        })();
+        let _ = self.request(&[cmd::CLOSE, 0x01, FILE_HANDLE]);
+        result
+    }
+
+    /// Replaces an onboard file with `data`: delete, create, open, write in
+    /// blocks, close, the same steps iCUE uses. CHANGES THE KEYBOARD'S
+    /// MEMORY: callers back up first.
+    pub fn write_file(&self, id: u16, data: &[u8]) -> Result<()> {
+        if data.len() > MAX_FILE {
+            return Err(Error::TooBig(data.len()));
+        }
+        let [lo, hi] = id.to_le_bytes();
+        // Deleting a file that isn't there is fine (status 1 = no such file).
+        let d = self.request(&[cmd::DELETE_FILE, lo, hi])?;
+        if d[2] != 0 && d[2] != 0x01 {
+            return Err(Error::Refused(cmd::DELETE_FILE, d[2]));
+        }
+        let c = self.request(&[cmd::CREATE_FILE, lo, hi])?;
+        if c[2] != 0 {
+            return Err(Error::Refused(cmd::CREATE_FILE, c[2]));
+        }
+        let o = self.request(&[cmd::OPEN, FILE_HANDLE, lo, hi])?;
+        if o[2] != 0 {
+            return Err(Error::Refused(cmd::OPEN, o[2]));
+        }
+        let result = (|| {
+            self.request(&[cmd::PROBE, FILE_HANDLE])?;
+            for block in data.chunks(WRITE_BLOCK) {
+                let (first, rest) = block.split_at(block.len().min(FIRST_PACKET_DATA));
+                let mut msg = vec![cmd::WRITE, FILE_HANDLE];
+                msg.extend_from_slice(&(block.len() as u32).to_le_bytes());
+                msg.extend_from_slice(first);
+                let r = self.request(&msg)?;
+                if r[2] != 0 {
+                    return Err(Error::Refused(cmd::WRITE, r[2]));
+                }
+                if !rest.is_empty() {
+                    let mut more = vec![cmd::CONTINUE_WRITE, FILE_HANDLE];
+                    more.extend_from_slice(rest);
+                    let r = self.request(&more)?;
+                    if r[2] != 0 {
+                        return Err(Error::Refused(cmd::CONTINUE_WRITE, r[2]));
+                    }
+                }
+            }
+            Ok(())
         })();
         let _ = self.request(&[cmd::CLOSE, 0x01, FILE_HANDLE]);
         result

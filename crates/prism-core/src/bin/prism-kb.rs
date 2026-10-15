@@ -5,6 +5,8 @@
 //!   prism-kb slots         light slots one at a time and print each number,
 //!                          to check which slot is which key
 //!   prism-kb backup DIR    copy every onboard file into DIR (read-only)
+//!   prism-kb rewrite 6d6a  write one onboard file back with its OWN contents,
+//!                          then read it again and compare (tests writing)
 //!
 //! When time is up the keyboard goes back to its own lighting. Typing keeps
 //! working the whole time.
@@ -46,6 +48,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if what == "rewrite" {
+        let arg = args.next().ok_or("give a file number, e.g. 6d6a")?;
+        let id = u16::from_str_radix(arg.trim_start_matches("0x"), 16).map_err(|_| format!("'{arg}' isn't a file number"))?;
+        let kb = K65Mini::open_with(&api, false)?;
+        let before = kb.read_file(id)?;
+        println!("read file {id:#06x}: {} bytes: {}", before.len(), hex(&before));
+        kb.write_file(id, &before)?;
+        let after = kb.read_file(id)?;
+        println!("wrote it back; read again: {} bytes", after.len());
+        println!("{}", if after == before { "IDENTICAL: writing works" } else { "DIFFERENT!" });
+        return Ok(());
+    }
     let kb = K65Mini::open(&api)?;
     println!("K65 RGB Mini found and switched to Prism control.");
 
@@ -75,4 +89,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     kb.release()?;
     println!("Done. Handed lighting back to the keyboard.");
     Ok(())
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().take(32).map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
 }

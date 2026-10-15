@@ -11,6 +11,9 @@
 //!   prism-mouse dpi 400 1600 3200 800
 //!                            set stages 1-3 and sniper, then try each for 8 s
 //!   prism-mouse backup DIR   copy every onboard file into DIR (read-only)
+//!   prism-mouse rewrite 1 lghtcnt.cnt
+//!                            write one onboard file back with its OWN
+//!                            contents, then read it again and compare
 //!   prism-mouse reset        just hand lighting back to the mouse
 //!
 //! When time is up the mouse goes back to its own lighting.
@@ -45,6 +48,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(dir.join(format!("{folder}_{name}")), &data)?;
             println!("  folder {folder} {name}: {} bytes", data.len());
         }
+        return Ok(());
+    }
+    if what == "rewrite" {
+        let folder: u8 = args.next().and_then(|s| s.parse().ok()).ok_or("give a folder number, e.g. 1")?;
+        let name = args.next().ok_or("give a file name, e.g. lghtcnt.cnt")?;
+        let mouse = Nightsword::open_with(&api, false)?;
+        let before = mouse.read_file(&api, folder, &name)?;
+        println!("read {folder}/{name}: {} bytes: {:02x?}", before.len(), &before[..before.len().min(32)]);
+        mouse.write_named(&api, folder, &name, &before)?;
+        let after = mouse.read_file(&api, folder, &name)?;
+        println!("wrote it back; read again: {} bytes", after.len());
+        println!("{}", if after == before { "IDENTICAL: writing works" } else { "DIFFERENT!" });
         return Ok(());
     }
     let mouse = Nightsword::open(&api)?;

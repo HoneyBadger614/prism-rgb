@@ -15,7 +15,6 @@ const Bindings = (() => {
   let apps = null;               // installed apps, loaded when first needed
   let appSearch = "";
   let capturing = false;
-  let teaching = null;           // mouse button name being learned
 
   const store = () => Lighting.state().store;
   const list = () => Lighting.profile().bindings;
@@ -54,11 +53,10 @@ const Bindings = (() => {
     return action.kind;
   }
 
-  // The mouse's buttons with the code each sends now: its out-of-the-box
-  // code, or what Prism learned from a press. Code 0 = not set up yet.
+  // The mouse's buttons and the code bindings use for each. The first five
+  // are standard Linux buttons; the rest the mouse normally handles itself.
   function mouseButtons() {
-    const learned = store().mouse_buttons || {};
-    return Lighting.state().mouseButtons.map(([name, code]) => ({ name, code: learned[name] || code }));
+    return Lighting.state().mouseButtons.map(([name, code], i) => ({ name, code, standard: i < 5 }));
   }
 
   // Name of the picked input, as the person sees it.
@@ -123,61 +121,25 @@ const Bindings = (() => {
         return b;
       }));
     } else {
-      const card = ({ name, code }) => {
-        const bound = code && find(code);
-        const b = el("button", "mbtn" + (bound ? " bound" : "") + (code && code === picked ? " sel" : ""));
+      const card = ({ name, code, standard }) => {
+        const bound = find(code);
+        const b = el("button", "mbtn" + (bound ? " bound" : "") + (code === picked ? " sel" : ""));
         b.append(el("span", "mbtn-name", name));
         if (name === "Left") {
           b.disabled = true;
           b.append(el("span", "mbtn-sends", "Always clicks"));
-        } else if (teaching === name) {
-          b.append(el("span", "mbtn-sends setup", "Press it now…"));
-        } else if (!code) {
-          b.append(el("span", "mbtn-sends setup", "Set up: press it once"));
-        } else if (isStandard(name, code)) {
-          b.append(el("span", "mbtn-sends", "Standard button"));
+        } else if (bound) {
+          b.append(el("span", "mbtn-to", `→ ${describe(bound.action)}`));
         } else {
-          b.append(el("span", "mbtn-sends", `Sends ${nameOf(code)}`));
+          b.append(el("span", "mbtn-sends", standard ? "Standard button" : "Your mouse's own setting"));
         }
-        if (bound) b.append(el("span", "mbtn-to", `→ ${describe(bound.action)}`));
-        b.addEventListener("click", () => (code ? pick(code) : teach(name)));
+        b.addEventListener("click", () => pick(code));
         return b;
       };
       const all = mouseButtons();
       $("bind-mouse-top").replaceChildren(...all.filter((b) => !SIDE_BUTTONS.has(b.name)).map(card));
       $("bind-mouse-side").replaceChildren(...all.filter((b) => SIDE_BUTTONS.has(b.name)).map(card));
     }
-  }
-
-  const isStandard = (name, code) => Lighting.state().mouseButtons.some(([n, c]) => n === name && c === code && c !== 0);
-
-  // Learn what a mouse button sends by having the person press it.
-  async function teach(name) {
-    report(`teach ${name} (busy: ${capturing})`);
-    if (capturing) return;
-    capturing = true;
-    teaching = name;
-    showCapture(`Press the ${name} button on your Nightsword now…`);
-    render();
-    const got = await invoke("capture_input", { device: "mouse" });
-    capturing = false;
-    teaching = null;
-    if (!got) {
-      showCapture(`Nothing came from the ${name} button. It may only change something inside the mouse (like DPI), which Prism can't see yet.`);
-      render();
-      return;
-    }
-    if (got.code === BTN_LEFT) {
-      showCapture("That was the left button. Try again and press the button you clicked.");
-      render();
-      return;
-    }
-    const other = mouseButtons().find((b) => b.code === got.code && b.name !== name);
-    names.set(got.code, got.name);
-    store().mouse_buttons = { ...(store().mouse_buttons || {}), [name]: got.code };
-    Lighting.save();
-    showCapture(other ? `Heads up: ${name} sends the same as ${other.name} (${got.name}), so they'll share a binding.` : "");
-    pick(got.code, true);
   }
 
   function pick(code, keepMessage) {

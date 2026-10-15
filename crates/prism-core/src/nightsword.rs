@@ -71,21 +71,29 @@ pub const ZONES: [(&str, u8); 5] =
     [("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3), ("Back", 6)];
 pub const ZONE_COUNT: usize = ZONES.len();
 
-/// The mouse's 10 buttons, and the Linux code each sends out of the box
-/// (0 = depends on the mouse's own saved settings; Prism learns it by having
-/// the person press the button once).
+/// The mouse's 10 buttons and the code bindings use for each. The first
+/// five send standard Linux button codes. The rest are handled inside the
+/// mouse and send nothing to Linux, so Prism gives them codes of its own
+/// (0x2f0 up, which Linux doesn't use) and, when one is bound, has the mouse
+/// report it on its button channel instead.
 pub const BUTTONS: [(&str, u16); 10] = [
     ("Left", 0x110),
     ("Right", 0x111),
     ("Middle", 0x112),
     ("Back", 0x113),
     ("Forward", 0x114),
-    ("DPI Up", 0),
-    ("DPI Down", 0),
-    ("Sniper", 0),
-    ("Profile Up", 0),
-    ("Profile Down", 0),
+    ("DPI Up", 0x2f0),
+    ("DPI Down", 0x2f1),
+    ("Sniper", 0x2f2),
+    ("Profile Up", 0x2f3),
+    ("Profile Down", 0x2f4),
 ];
+
+/// The button behind one of Prism's own codes (the ones the mouse only
+/// reports on its button channel).
+pub fn reported_button(code: u16) -> Option<&'static str> {
+    BUTTONS.iter().skip(5).find(|(_, c)| *c == code).map(|(n, _)| *n)
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -247,6 +255,13 @@ mod tests {
         // front (id 1), scroll (4), logo (2), DPI light (3), back (6)
         assert_eq!(&r[5..25], &[1, 1, 2, 3, 4, 4, 5, 6, 2, 7, 8, 9, 3, 10, 11, 12, 6, 13, 14, 15]);
         assert!(r[25..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn reported_buttons_have_own_codes() {
+        assert_eq!(reported_button(0x2f2), Some("Sniper"));
+        assert_eq!(reported_button(0x113), None); // Back is a normal Linux button
+        assert!(BUTTONS.iter().all(|(n, _)| BUTTON_IDS.iter().any(|(m, _, _)| m == n)));
     }
 
     #[test]

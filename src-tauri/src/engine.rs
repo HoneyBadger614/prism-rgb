@@ -27,6 +27,8 @@ const SAVE_AFTER: Duration = Duration::from_secs(1);
 
 enum Msg {
     Config(LightingStore),
+    /// Which mouse buttons should report to the computer (for bindings).
+    MouseReporting(Vec<&'static str>),
     Stop,
 }
 
@@ -88,6 +90,7 @@ impl Engine {
             let mut kb: Link<K65Mini> = Link::new();
             let mut mouse: Link<Nightsword> = Link::new();
             let mut unsaved_since: Option<Instant> = None;
+            let mut reporting: Vec<&'static str> = Vec::new();
             let start = Instant::now();
             let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![] };
 
@@ -98,7 +101,13 @@ impl Engine {
                     (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
                 });
                 kb.reconnect(&mut api, |api| K65Mini::open(api).ok());
+                let had_mouse = mouse.dev.is_some();
                 mouse.reconnect(&mut api, |api| Nightsword::open(api).ok());
+                if !had_mouse && !reporting.is_empty() {
+                    if let Some(m) = &mouse.dev {
+                        let _ = m.report_buttons(&reporting);
+                    }
+                }
 
                 let t = start.elapsed().as_secs_f64();
                 let profile = cfg.active_profile().unwrap_or(&empty);
@@ -148,6 +157,14 @@ impl Engine {
                         cfg = c;
                         unsaved_since = Some(Instant::now());
                     }
+                    Ok(Msg::MouseReporting(names)) => {
+                        if names != reporting {
+                            reporting = names;
+                            if let Some(m) = &mouse.dev {
+                                let _ = m.report_buttons(&reporting);
+                            }
+                        }
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => {
                         if unsaved_since.is_some() {
@@ -179,6 +196,12 @@ impl Engine {
     pub fn set_config(&self, config: LightingStore) {
         *self.config.lock().unwrap() = config.clone();
         let _ = self.tx.send(Msg::Config(config));
+    }
+
+    /// Sets which mouse buttons report to the computer instead of the mouse
+    /// handling them. Everything else stays with the mouse.
+    pub fn set_mouse_reporting(&self, names: Vec<&'static str>) {
+        let _ = self.tx.send(Msg::MouseReporting(names));
     }
 
     /// Stops the thread and hands the devices back. Waits until it's done.

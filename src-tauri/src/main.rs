@@ -2,6 +2,7 @@
 
 mod apps;
 mod engine;
+mod mouse_buttons;
 mod remap;
 
 use std::time::Duration;
@@ -106,7 +107,7 @@ fn get_lighting(state: State<AppState>) -> LightingState {
 fn set_lighting(state: State<AppState>, store: LightingStore) -> LightingStore {
     let store = store.sanitized(&state.fans, &state.keyboard, &state.mouse);
     state.engine.set_config(store.clone());
-    state.remap.apply(&store);
+    state.remap.apply(&store, &state.engine);
     store
 }
 
@@ -128,7 +129,10 @@ async fn capture_input(app: tauri::AppHandle, device: InputDevice) -> Option<Pre
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let store = state.engine.config();
-        state.remap.capture(&store, device, Duration::from_secs(8)).map(|code| Pressed { code, name: key_name(code) })
+        state
+            .remap
+            .capture(&store, &state.engine, device, Duration::from_secs(8))
+            .map(|code| Pressed { code, name: key_name(code) })
     })
     .await
     .ok()
@@ -184,8 +188,8 @@ fn main() {
             let (fans, keyboard, mouse) = (devices.fans.clone(), devices.keyboard.clone(), devices.mouse.clone());
             let config = engine::load(&save_to, &devices);
             let remap = Remap::default();
-            remap.apply(&config);
-            let engine = Engine::spawn(app.handle().clone(), config, devices, save_to);
+            let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to);
+            remap.apply(&config, &engine);
             app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, remap });
             Ok(())
         })

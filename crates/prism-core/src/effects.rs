@@ -137,10 +137,6 @@ pub struct LightingStore {
     /// Master switch for key and button bindings.
     #[serde(default = "yes")]
     pub bindings_on: bool,
-    /// What each mouse button sends, for buttons whose code depends on the
-    /// mouse's own settings (learned by pressing them): name -> key code.
-    #[serde(default)]
-    pub mouse_buttons: std::collections::BTreeMap<String, u16>,
 }
 
 fn yes() -> bool {
@@ -303,7 +299,7 @@ impl LightingStore {
             mouse: default_device_layers(),
             bindings: vec![],
         };
-        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true, mouse_buttons: Default::default() }
+        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true }
     }
 
     /// Fixes anything out of range: numbers, names, too many profiles or
@@ -326,10 +322,6 @@ impl LightingStore {
             })
             .collect();
         self.active = self.active.min(self.profiles.len() - 1);
-        // Only real mouse buttons, with real key codes.
-        self.mouse_buttons.retain(|name, code| {
-            crate::nightsword::BUTTONS.iter().any(|(n, _)| n == name) && *code > 0 && *code <= crate::bindings::MAX_CODE
-        });
         self
     }
 
@@ -429,7 +421,7 @@ mod tests {
     }
 
     fn one(layer: Layer) -> LightingStore {
-        LightingStore { active: 0, brightness: 100, bindings_on: true, mouse_buttons: Default::default(), profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![] }] }
+        LightingStore { active: 0, brightness: 100, bindings_on: true, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![] }] }
     }
 
     fn fx(effect: Effect, spread: Spread) -> Layer {
@@ -518,7 +510,6 @@ mod tests {
             active: 0,
             brightness: 100,
             bindings_on: true,
-            mouse_buttons: Default::default(),
             profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![] }],
         };
         let f = render(&hub_ring, &layout, 1.0);
@@ -559,19 +550,17 @@ mod tests {
             active: 99,
             brightness: 200,
             bindings_on: true,
-            mouse_buttons: [("Sniper".to_string(), 98), ("Nope".to_string(), 98), ("DPI Up".to_string(), 0)].into(),
             profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![] }],
         }
         .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert_eq!((s.active, s.brightness), (0, 100));
-        assert_eq!(s.mouse_buttons.len(), 1); // only the real button with a real code
         assert_eq!(s.profiles[0].name.chars().count(), MAX_NAME_LEN);
         assert_eq!(s.profiles[0].layers.len(), MAX_LAYERS);
         let l = &s.profiles[0].layers[0];
         assert_eq!((l.brightness, l.speed, l.name.as_str()), (100, 1, "Layer"));
         assert_eq!(l.target, Target::Leds { leds: vec![LedRef(0, 47)] });
 
-        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true, mouse_buttons: Default::default() }
+        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true }
             .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert!(!empty.profiles.is_empty());
     }

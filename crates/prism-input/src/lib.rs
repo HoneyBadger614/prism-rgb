@@ -138,6 +138,44 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
     }
 }
 
+/// Performs actions for presses that don't come from a Linux input device
+/// (like Nightsword buttons reported on its own channel), through its own
+/// virtual device.
+pub struct ActionSender {
+    out: VirtualDevice,
+}
+
+impl ActionSender {
+    /// A virtual device able to send every key the given actions use.
+    pub fn new(actions: &[Action]) -> std::io::Result<Self> {
+        let mut keys = AttributeSet::<Key>::new();
+        actions.iter().flat_map(Action::keys).for_each(|k| keys.insert(Key::new(k)));
+        // A device with no keys at all isn't allowed; give it one harmless key.
+        if keys.iter().next().is_none() {
+            keys.insert(Key::KEY_UNKNOWN);
+        }
+        let out = VirtualDeviceBuilder::new()?.name(VIRTUAL_NAME).with_keys(&keys)?.build()?;
+        Ok(Self { out })
+    }
+
+    /// Sends what `action` does when its button is pressed (`down`) or let go.
+    pub fn act(&mut self, action: &Action, down: bool) {
+        if let (Action::Launch(app), true) = (action, down) {
+            launch(app);
+        }
+        // Reuse the same press/release rules as remapped keys.
+        let value = if down { PRESSED } else { RELEASED };
+        let rules: HashMap<u16, Action> = [(0, action.clone())].into();
+        let events: Vec<InputEvent> = translate(0, value, &rules)
+            .into_iter()
+            .map(|(code, v)| InputEvent::new(EventType::KEY, code, v))
+            .collect();
+        if !events.is_empty() {
+            let _ = self.out.emit(&events);
+        }
+    }
+}
+
 /// Remaps keys while it's alive. Dropping it (or calling [`Remapper::stop`])
 /// hands every device back.
 pub struct Remapper {

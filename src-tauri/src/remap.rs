@@ -9,6 +9,9 @@ use prism_core::effects::LightingStore;
 use prism_core::{k65_mini, nightsword};
 use prism_input::{capture_press, Action, Binding, Remapper};
 
+use crate::engine::Engine;
+use crate::mouse_buttons::ButtonListener;
+
 pub fn product(device: InputDevice) -> u16 {
     match device {
         InputDevice::Keyboard => k65_mini::PID,
@@ -16,14 +19,19 @@ pub fn product(device: InputDevice) -> u16 {
     }
 }
 
-fn convert(b: &BindingDef) -> Binding {
-    let action = match &b.action {
+fn action(a: &ActionDef) -> Action {
+    match a {
         ActionDef::Key { key } => Action::Key(*key),
         ActionDef::Combo { keys } => Action::Combo(keys.clone()),
         ActionDef::Launch { app } => Action::Launch(app.clone()),
         ActionDef::Disabled => Action::Disabled,
-    };
-    Binding { product: product(b.device), input: b.input, action }
+    }
+}
+
+/// The mouse button behind a binding, if it's one the mouse reports on its
+/// own channel (DPI, Sniper, Profile) rather than through Linux.
+fn reported(b: &BindingDef) -> Option<&'static str> {
+    (b.device == InputDevice::Mouse).then(|| nightsword::reported_button(b.input)).flatten()
 }
 
 #[derive(Default)]
@@ -31,6 +39,7 @@ struct Inner {
     /// What's running now: (bindings switched on, the bindings).
     applied: Option<(bool, Vec<BindingDef>)>,
     remapper: Option<Remapper>,
+    buttons: Option<ButtonListener>,
     error: Option<String>,
 }
 
@@ -41,7 +50,7 @@ pub struct Remap {
 
 impl Remap {
     /// Starts, restarts or stops remapping to match the active profile.
-    pub fn apply(&self, store: &LightingStore) {
+    pub fn apply(&self, store: &LightingStore, engine: &Engine) {
         let bindings = store.active_profile().map(|p| p.bindings.clone()).unwrap_or_default();
         let wanted = (store.bindings_on, bindings);
         let mut g = self.inner.lock().unwrap();
@@ -51,9 +60,27 @@ impl Remap {
         if let Some(r) = g.remapper.take() {
             r.stop();
         }
+        if let Some(b) = g.buttons.take() {
+            b.stop();
+        }
         g.error = None;
-        if wanted.0 && !wanted.1.is_empty() {
-            let list: Vec<Binding> = wanted.1.iter().map(convert).collect();
+        let active: &[BindingDef] = if wanted.0 { &wanted.1 } else { &[] };
+
+        // Buttons the mouse reports itself go to the button listener...
+        let on_channel: Vec<(&'static str, Action)> =
+            active.iter().filter_map(|b| reported(b).map(|name| (name, action(&b.action)))).collect();
+        engine.set_mouse_reporting(on_channel.iter().map(|(n, _)| *n).collect());
+        if !on_channel.is_empty() {
+            g.buttons = Some(ButtonListener::start(on_channel));
+        }
+
+        // ...everything else is remapped through Linux input.
+        let list: Vec<Binding> = active
+            .iter()
+            .filter(|b| reported(b).is_none())
+            .map(|b| Binding { product: product(b.device), input: b.input, action: action(&b.action) })
+            .collect();
+        if !list.is_empty() {
             match Remapper::start(&list) {
                 Ok(r) => g.remapper = Some(r),
                 Err(e) => g.error = Some(format!("Couldn't take over the keyboard or mouse: {e}")),
@@ -64,7 +91,7 @@ impl Remap {
 
     /// Waits for the next press on a device and returns its code. Remapping
     /// pauses meanwhile so the press is seen as it really is.
-    pub fn capture(&self, store: &LightingStore, device: InputDevice, timeout: Duration) -> Option<u16> {
+    pub fn capture(&self, store: &LightingStore, engine: &Engine, device: InputDevice, timeout: Duration) -> Option<u16> {
         {
             let mut g = self.inner.lock().unwrap();
             if let Some(r) = g.remapper.take() {
@@ -73,7 +100,7 @@ impl Remap {
             g.applied = None;
         }
         let code = capture_press(product(device), timeout);
-        self.apply(store);
+        self.apply(store, engine);
         code
     }
 
@@ -85,6 +112,9 @@ impl Remap {
         let mut g = self.inner.lock().unwrap();
         if let Some(r) = g.remapper.take() {
             r.stop();
+        }
+        if let Some(b) = g.buttons.take() {
+            b.stop();
         }
     }
 }

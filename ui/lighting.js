@@ -1111,6 +1111,14 @@ const Lighting = (() => {
 
     const { listen } = window.__TAURI__.event;
     await listen("lighting-frame", (e) => { frame = e.payload; drawFans(); });
+    // Changed from the tray menu (profile, bindings on/off).
+    await listen("store-updated", (e) => {
+      light.store = e.payload;
+      layerIndex = Math.max(0, stack().length - 1);
+      hsv = null;
+      renderAll();
+      listeners.forEach((fn) => fn());
+    });
     window.addEventListener("resize", drawFans);
   }
 

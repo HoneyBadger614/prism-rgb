@@ -133,6 +133,13 @@ impl LightingNode {
         Ok(Self { dev: api.open_path(&c_path)?, software_since: Cell::new([None; CHANNELS as usize]) })
     }
 
+    /// Treats both channels as already in software mode (Prism restarting
+    /// itself), so the first colors don't re-send the mode switch, which
+    /// briefly blanks the lights. It's re-sent at the next keepalive anyway.
+    pub fn assume_software(&self) {
+        self.software_since.set([Some(Instant::now()); CHANNELS as usize]);
+    }
+
     /// Sends one command and waits for the device's reply.
     fn send(&self, command: u8, args: &[u8]) -> Result<[u8; REPLY_LEN]> {
         self.send_report(&report(command, args))

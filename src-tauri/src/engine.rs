@@ -20,7 +20,7 @@ use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
 use prism_core::nightsword::{self, Nightsword};
 use prism_core::Rgb;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const FRAME_TIME: Duration = Duration::from_millis(33); // ~30 frames a second
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
@@ -32,6 +32,8 @@ enum Msg {
     MouseReporting(Vec<&'static str>),
     /// A DPI binding was pressed (true) or let go.
     Dpi(DpiOp, bool),
+    /// Save settings now; reply when done.
+    Flush(Sender<()>),
     Stop,
 }
 
@@ -81,6 +83,9 @@ pub struct Devices {
 
 pub struct Engine {
     tx: Sender<Msg>,
+    /// When effects started, so a restarted Prism can carry on from the same
+    /// point instead of jumping back to the beginning.
+    started: Instant,
     thread: Mutex<Option<JoinHandle<()>>>,
     config: Mutex<LightingStore>,
 }
@@ -110,7 +115,10 @@ impl<T> Link<T> {
 }
 
 impl Engine {
-    pub fn spawn(app: AppHandle, config: LightingStore, devices: Devices, save_to: Option<PathBuf>) -> Self {
+    /// `resume_at` is how many seconds into the effects to start (after a
+    /// background restart), so animations don't jump.
+    pub fn spawn(app: AppHandle, config: LightingStore, devices: Devices, save_to: Option<PathBuf>, resume_at: f64) -> Self {
+        let started = Instant::now().checked_sub(Duration::from_secs_f64(resume_at.clamp(0.0, 1e7))).unwrap_or_else(Instant::now);
         let (tx, rx) = mpsc::channel();
         let start_config = config.clone();
 
@@ -127,18 +135,60 @@ impl Engine {
             let mut dpi_applied: Option<DpiSettings> = None;
             let mut stage: u8 = 0;
             let mut sniper = false;
-            let start = Instant::now();
+            // After a background restart the devices are still in Prism's
+            // control, so the first connection skips "take control".
+            let mut resuming = resume_at > 0.0;
+            let start = started;
             let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() };
 
             loop {
+                // Work out this frame first, so a device that (re)connects
+                // gets its colors straight away. Its "take control" message
+                // blanks its lights until colors arrive.
+                let t = start.elapsed().as_secs_f64();
+                let profile = cfg.active_profile().unwrap_or(&empty);
+                let fans = render_layers(&profile.layers, &devices.fans, cfg.brightness, t);
+                let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
+                let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
+                let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
+                let zones: &[Rgb] = zones.first().map_or(&[], Vec::as_slice);
+
                 node.reconnect(&mut api, |api| {
                     let n = LightingNode::open(api).ok()?;
+                    if resuming {
+                        n.assume_software();
+                        return Some(n);
+                    }
                     // We do brightness ourselves, so the device stays at full.
                     (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
                 });
-                kb.reconnect(&mut api, |api| K65Mini::open(api).ok());
+                if let Some(n) = &node.dev {
+                    let sent = fans
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, colors)| !colors.is_empty())
+                        .all(|(ch, colors)| n.set_colors(ch as u8, colors).is_ok());
+                    if !sent {
+                        node.dev = None; // unplugged, or something else took it over
+                    }
+                }
+
+                kb.reconnect(&mut api, |api| K65Mini::open_with(api, !resuming).ok());
+                if let Some(k) = &kb.dev {
+                    if k.set_colors(&k65_mini::slot_colors(&devices.keys, keys)).is_err() {
+                        kb.dev = None;
+                    }
+                }
+
                 let had_mouse = mouse.dev.is_some();
-                mouse.reconnect(&mut api, |api| Nightsword::open(api).ok());
+                mouse.reconnect(&mut api, |api| Nightsword::open_with(api, !resuming).ok());
+                resuming = false; // only the very first connection
+                if let (Some(m), Ok(z)) = (&mouse.dev, <[Rgb; nightsword::ZONE_COUNT]>::try_from(zones)) {
+                    if m.set_colors(&z).is_err() {
+                        mouse.dev = None;
+                    }
+                }
+                // The mouse's slower setup comes after its colors.
                 if !had_mouse && mouse.dev.is_some() {
                     dpi_applied = None; // a (re)connected mouse needs its DPI set again
                     if !reporting.is_empty() {
@@ -147,7 +197,7 @@ impl Engine {
                 }
 
                 // Keep the mouse's DPI in step with the profile.
-                let dpi_want = cfg.active_profile().map(|p| p.dpi.clone()).unwrap_or_default();
+                let dpi_want = profile.dpi.clone();
                 if let Some(m) = &mouse.dev {
                     if dpi_want.enabled && dpi_applied.as_ref() != Some(&dpi_want) {
                         let first = dpi_applied.as_ref().map_or(true, |d| !d.enabled);
@@ -169,35 +219,10 @@ impl Engine {
                     }
                 }
 
-                let t = start.elapsed().as_secs_f64();
-                let profile = cfg.active_profile().unwrap_or(&empty);
-                let fans = render_layers(&profile.layers, &devices.fans, cfg.brightness, t);
-                let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
-                let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
-                let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
-                let zones: &[Rgb] = zones.first().map_or(&[], Vec::as_slice);
-
-                if let Some(n) = &node.dev {
-                    let sent = fans
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, colors)| !colors.is_empty())
-                        .all(|(ch, colors)| n.set_colors(ch as u8, colors).is_ok());
-                    if !sent {
-                        node.dev = None; // unplugged, or something else took it over
-                    }
+                // Only bother the screen when there is one.
+                if !app.webview_windows().is_empty() {
+                    let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys, mouse: zones });
                 }
-                if let Some(k) = &kb.dev {
-                    if k.set_colors(&k65_mini::slot_colors(&devices.keys, keys)).is_err() {
-                        kb.dev = None;
-                    }
-                }
-                if let (Some(m), Ok(z)) = (&mouse.dev, <[Rgb; nightsword::ZONE_COUNT]>::try_from(zones)) {
-                    if m.set_colors(&z).is_err() {
-                        mouse.dev = None;
-                    }
-                }
-                let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys, mouse: zones });
 
                 if unsaved_since.is_some_and(|t| t.elapsed() >= SAVE_AFTER) {
                     save(&save_to, &cfg);
@@ -216,6 +241,11 @@ impl Engine {
                     Ok(Msg::Config(c)) => {
                         cfg = c;
                         unsaved_since = Some(Instant::now());
+                    }
+                    Ok(Msg::Flush(done)) => {
+                        save(&save_to, &cfg);
+                        unsaved_since = None;
+                        let _ = done.send(());
                     }
                     Ok(Msg::Dpi(op, down)) => {
                         if let (Some(m), Some(d)) = (&mouse.dev, dpi_applied.as_ref().filter(|d| d.enabled)) {
@@ -262,7 +292,7 @@ impl Engine {
             }
         });
 
-        Self { tx, thread: Mutex::new(Some(thread)), config: Mutex::new(config) }
+        Self { tx, started, thread: Mutex::new(Some(thread)), config: Mutex::new(config) }
     }
 
     pub fn config(&self) -> LightingStore {
@@ -278,6 +308,19 @@ impl Engine {
     /// handling them. Everything else stays with the mouse.
     pub fn set_mouse_reporting(&self, names: Vec<&'static str>) {
         let _ = self.tx.send(Msg::MouseReporting(names));
+    }
+
+    /// Seconds since effects started.
+    pub fn elapsed(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
+    /// Saves settings to disk now, waiting (briefly) until it's done.
+    pub fn flush(&self) {
+        let (tx, rx) = mpsc::channel();
+        if self.tx.send(Msg::Flush(tx)).is_ok() {
+            let _ = rx.recv_timeout(Duration::from_secs(2));
+        }
     }
 
     /// A callback for bindings: DPI action numbers become DPI changes.

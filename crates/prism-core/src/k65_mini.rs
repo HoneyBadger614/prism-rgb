@@ -32,7 +32,7 @@ const VENDOR_USAGE_PAGE: u16 = 0xff42;
 const VENDOR_USAGE: u16 = 0x0001;
 const REPORT_LEN: usize = 1025; // report number + 1024 bytes
 const HEADER: u8 = 0x08;
-const REPLY_TIMEOUT_MS: i32 = 100;
+const REPLY_TIMEOUT_MS: i32 = 30;
 
 mod cmd {
     pub const SET: u8 = 0x01;
@@ -114,6 +114,13 @@ impl K65Mini {
     /// Opens the keyboard's vendor interface and switches it to software
     /// control. Typing keeps working; only the lighting changes hands.
     pub fn open(api: &HidApi) -> Result<Self> {
+        Self::open_with(api, true)
+    }
+
+    /// Like [`K65Mini::open`]. With `take_control` false, the keyboard is
+    /// assumed to be in software mode already (Prism restarting itself), so
+    /// the mode switch, which briefly blanks the lights, is skipped.
+    pub fn open_with(api: &HidApi, take_control: bool) -> Result<Self> {
         let path = find_devices(api)
             .into_iter()
             .find(|d| d.pid == PID)
@@ -126,9 +133,11 @@ impl K65Mini {
             .path;
         let c_path = CString::new(path).map_err(|_| Error::NotFound)?;
         let kb = Self { dev: api.open_path(&c_path)? };
-        kb.send(&[cmd::SET, property::MODE, 0x00, mode::SOFTWARE])?;
-        kb.send(&[cmd::GET, 0x6e])?;
-        kb.send(&[cmd::OPEN, HANDLE, LIGHTING_RESOURCE])?;
+        if take_control {
+            kb.send(&[cmd::SET, property::MODE, 0x00, mode::SOFTWARE])?;
+            kb.send(&[cmd::GET, 0x6e])?;
+            kb.send(&[cmd::OPEN, HANDLE, LIGHTING_RESOURCE])?;
+        }
         Ok(kb)
     }
 

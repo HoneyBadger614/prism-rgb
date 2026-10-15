@@ -201,6 +201,13 @@ impl Nightsword {
     /// Opens the mouse's control interface and switches it to software
     /// control. The mouse keeps working normally.
     pub fn open(api: &HidApi) -> Result<Self> {
+        Self::open_with(api, true)
+    }
+
+    /// Like [`Nightsword::open`]. With `take_control` false, the mouse is
+    /// assumed to be in software mode already (Prism restarting itself), so
+    /// the mode switch, which briefly blanks the lights, is skipped.
+    pub fn open_with(api: &HidApi, take_control: bool) -> Result<Self> {
         let path = find_devices(api)
             .into_iter()
             .find(|d| d.pid == PID)
@@ -209,7 +216,9 @@ impl Nightsword {
             .path;
         let c_path = CString::new(path).map_err(|_| Error::NotFound)?;
         let mouse = Self { dev: api.open_path(&c_path)? };
-        mouse.dev.write(&report(&[cmd::MODE, mode::SOFTWARE]))?;
+        if take_control {
+            mouse.dev.write(&report(&[cmd::MODE, mode::SOFTWARE]))?;
+        }
         Ok(mouse)
     }
 

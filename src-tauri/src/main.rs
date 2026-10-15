@@ -1,9 +1,11 @@
 // Prism desktop app: the window and the bridge between the screen and prism-core.
 
 mod apps;
+mod autostart;
 mod engine;
 mod mouse_buttons;
 mod remap;
+mod tray;
 
 use std::time::Duration;
 
@@ -61,7 +63,7 @@ fn list_devices() -> Result<Vec<DeviceInfo>, String> {
         .collect())
 }
 
-struct AppState {
+pub(crate) struct AppState {
     engine: Engine,
     layout: Vec<ChannelLayout>,
     fans: Surface,
@@ -104,10 +106,11 @@ fn get_lighting(state: State<AppState>) -> LightingState {
 /// Applies new lighting settings (all profiles). Returns them with anything
 /// out of range fixed.
 #[tauri::command]
-fn set_lighting(state: State<AppState>, store: LightingStore) -> LightingStore {
+fn set_lighting(app: tauri::AppHandle, state: State<AppState>, store: LightingStore) -> LightingStore {
     let store = store.sanitized(&state.fans, &state.keyboard, &state.mouse);
     state.engine.set_config(store.clone());
     state.remap.apply(&store, &state.engine);
+    tray::refresh(&app); // profile names or the bindings switch may have changed
     store
 }
 
@@ -184,6 +187,24 @@ fn bindings_status(state: State<AppState>) -> Option<String> {
     state.remap.error()
 }
 
+/// After restarting in the background, the old window's web helper
+/// processes exit and are left as "zombie" entries until collected. Collect
+/// them for the first half minute.
+fn reap_leftovers() {
+    extern "C" {
+        fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+    }
+    const WNOHANG: i32 = 1;
+    std::thread::spawn(|| {
+        for _ in 0..30 {
+            let mut status = 0;
+            // Safety: plain libc call with a valid pointer.
+            while unsafe { waitpid(-1, &mut status, WNOHANG) } > 0 {}
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
 fn main() {
     // WebKitGTK's DMA-BUF renderer crashes on NVIDIA under Wayland
     // ("Error 71 (Protocol error)"). Turn it off unless the user chose otherwise.
@@ -192,8 +213,26 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // Started at login, or restarted after the window closed: stay in the
+    // tray without opening the window.
+    let hidden = std::env::args().any(|a| a == "--hidden");
+    let resume_at: f64 = std::env::args()
+        .find_map(|a| a.strip_prefix("--resume-at=").and_then(|v| v.parse().ok()))
+        .unwrap_or(0.0);
+    if hidden {
+        reap_leftovers();
+    }
+
     let app = tauri::Builder::default()
-        .setup(|app| {
+        // Only one Prism at a time (two would fight over the devices);
+        // opening it again just shows the window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_window(app)))
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                tray::window_closed(window.app_handle());
+            }
+        })
+        .setup(move |app| {
             // ~/.config/io.github.honeybadger.prism/lighting.json
             let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
             let layout = node_layout();
@@ -207,9 +246,13 @@ fn main() {
             let (fans, keyboard, mouse) = (devices.fans.clone(), devices.keyboard.clone(), devices.mouse.clone());
             let config = engine::load(&save_to, &devices);
             let remap = Remap::default();
-            let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to);
+            let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to, resume_at);
             remap.apply(&config, &engine);
             app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, remap });
+            tray::create(app.handle())?;
+            if !hidden {
+                tray::show_window(app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -227,11 +270,15 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Prism failed to start");
 
-    app.run(|handle, event| {
-        if let RunEvent::Exit = event {
+    app.run(|handle, event| match event {
+        // Closing the window isn't quitting: keep running in the tray. (Quit
+        // from the tray menu asks to exit with a code, which is let through.)
+        RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+        RunEvent::Exit => {
             let state = handle.state::<AppState>();
             state.remap.stop();
             state.engine.stop();
         }
+        _ => {}
     });
 }

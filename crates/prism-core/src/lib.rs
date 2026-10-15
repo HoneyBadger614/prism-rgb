@@ -10,6 +10,7 @@ use hidapi::HidApi;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod effects;
+pub mod k65_mini;
 pub mod lighting_node;
 
 /// A color, 0–255 per part.

@@ -27,6 +27,13 @@ npm install
 npm run dev
 ```
 
+To add Prism (with its icon) to your app launcher and taskbar:
+
+```sh
+scripts/install-desktop.sh            # add
+scripts/install-desktop.sh --remove   # remove
+```
+
 To list connected Corsair devices in the terminal instead:
 
 ```sh

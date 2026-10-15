@@ -40,7 +40,7 @@ To list connected Corsair devices in the terminal instead:
 cargo run --bin prism-probe
 ```
 
-Both are read-only for now and never send anything to a device.
+`prism-probe` is read-only and never sends anything to a device.
 
 ## Project layout
 

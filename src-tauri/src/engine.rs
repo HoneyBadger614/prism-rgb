@@ -1,20 +1,22 @@
 //! The lighting engine: a background thread that renders effects, sends them
-//! to the Lighting Node Pro, and tells the screen what it sent.
+//! to the Lighting Node Pro and the K65 keyboard, and tells the screen what
+//! it sent.
 //!
-//! It keeps running when no device is connected (the preview still works) and
-//! checks for the device every couple of seconds, so unplugging and
+//! It keeps running when a device isn't connected (the preview still works)
+//! and looks for missing devices every couple of seconds, so unplugging and
 //! replugging just works.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
-use prism_core::effects::{render, ChannelLayout, Layer, LightingStore, Profile};
+use prism_core::effects::{render_layers, Layer, LightingStore, Profile, Surface};
+use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
+use prism_core::Rgb;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -27,69 +29,94 @@ enum Msg {
     Stop,
 }
 
+/// What the screen gets each frame: exactly what each device was sent.
 #[derive(Clone, Serialize)]
-struct Status {
-    connected: bool,
+struct Frame<'a> {
+    node: &'a [Vec<Rgb>],
+    keyboard: &'a [Rgb],
+}
+
+/// The devices Prism drives, plus how they're laid out.
+pub struct Devices {
+    pub fans: Surface,
+    pub keyboard: Surface,
+    pub keys: Vec<Key>,
 }
 
 pub struct Engine {
     tx: Sender<Msg>,
     thread: Mutex<Option<JoinHandle<()>>>,
     config: Mutex<LightingStore>,
-    connected: Arc<AtomicBool>,
+}
+
+/// One device the engine may or may not have open right now.
+struct Link<T> {
+    dev: Option<T>,
+    last_try: Option<Instant>,
+}
+
+impl<T> Link<T> {
+    fn new() -> Self {
+        Self { dev: None, last_try: None }
+    }
+
+    /// Tries `open` if the device is missing and it's been a while.
+    fn reconnect(&mut self, api: &mut Option<HidApi>, open: impl Fn(&HidApi) -> Option<T>) {
+        if self.dev.is_some() || self.last_try.is_some_and(|t| t.elapsed() < RECONNECT_EVERY) {
+            return;
+        }
+        self.last_try = Some(Instant::now());
+        if let Some(api) = api.as_mut() {
+            let _ = api.refresh_devices();
+            self.dev = open(api);
+        }
+    }
 }
 
 impl Engine {
-    pub fn spawn(app: AppHandle, config: LightingStore, layout: Vec<ChannelLayout>, save_to: Option<PathBuf>) -> Self {
+    pub fn spawn(app: AppHandle, config: LightingStore, devices: Devices, save_to: Option<PathBuf>) -> Self {
         let (tx, rx) = mpsc::channel();
-        let connected = Arc::new(AtomicBool::new(false));
-        let flag = connected.clone();
         let start_config = config.clone();
 
         let thread = std::thread::spawn(move || {
             let mut cfg = start_config;
             let mut api = HidApi::new().ok();
-            let mut node: Option<LightingNode> = None;
-            let mut last_try: Option<Instant> = None;
+            let mut node: Link<LightingNode> = Link::new();
+            let mut kb: Link<K65Mini> = Link::new();
             let mut unsaved_since: Option<Instant> = None;
             let start = Instant::now();
-
-            let set_connected = |on: bool| {
-                if flag.swap(on, Ordering::SeqCst) != on {
-                    let _ = app.emit("lighting-status", Status { connected: on });
-                }
-            };
+            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![] };
 
             loop {
-                // Look for the device if we don't have it.
-                if node.is_none() && last_try.map_or(true, |t| t.elapsed() >= RECONNECT_EVERY) {
-                    last_try = Some(Instant::now());
-                    if let Some(api) = api.as_mut() {
-                        let _ = api.refresh_devices();
-                        if let Ok(n) = LightingNode::open(api) {
-                            // We do brightness ourselves, so the device stays at full.
-                            if (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()) {
-                                node = Some(n);
-                                set_connected(true);
-                            }
-                        }
-                    }
-                }
+                node.reconnect(&mut api, |api| {
+                    let n = LightingNode::open(api).ok()?;
+                    // We do brightness ourselves, so the device stays at full.
+                    (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
+                });
+                kb.reconnect(&mut api, |api| K65Mini::open(api).ok());
 
-                let frame = render(&cfg, &layout, start.elapsed().as_secs_f64());
+                let t = start.elapsed().as_secs_f64();
+                let profile = cfg.active_profile().unwrap_or(&empty);
+                let fans = render_layers(&profile.layers, &devices.fans, cfg.brightness, t);
+                let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
+                let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
 
-                if let Some(n) = &node {
-                    let sent = frame
+                if let Some(n) = &node.dev {
+                    let sent = fans
                         .iter()
                         .enumerate()
                         .filter(|(_, colors)| !colors.is_empty())
                         .all(|(ch, colors)| n.set_colors(ch as u8, colors).is_ok());
                     if !sent {
-                        node = None; // unplugged, or something else took it over
-                        set_connected(false);
+                        node.dev = None; // unplugged, or something else took it over
                     }
                 }
-                let _ = app.emit("lighting-frame", &frame);
+                if let Some(k) = &kb.dev {
+                    if k.set_colors(&k65_mini::slot_colors(&devices.keys, keys)).is_err() {
+                        kb.dev = None;
+                    }
+                }
+                let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys });
 
                 if unsaved_since.is_some_and(|t| t.elapsed() >= SAVE_AFTER) {
                     save(&save_to, &cfg);
@@ -100,7 +127,7 @@ impl Engine {
                 if unsaved_since.is_some() {
                     wait = wait.min(SAVE_AFTER);
                 }
-                if node.is_none() {
+                if node.dev.is_none() || kb.dev.is_none() {
                     wait = wait.min(RECONNECT_EVERY);
                 }
 
@@ -114,8 +141,12 @@ impl Engine {
                         if unsaved_since.is_some() {
                             save(&save_to, &cfg);
                         }
-                        if let Some(n) = node {
-                            let _ = n.release(); // back to the device's own effect
+                        // Back to each device's own lighting.
+                        if let Some(n) = node.dev {
+                            let _ = n.release();
+                        }
+                        if let Some(k) = kb.dev {
+                            let _ = k.release();
                         }
                         return;
                     }
@@ -123,15 +154,11 @@ impl Engine {
             }
         });
 
-        Self { tx, thread: Mutex::new(Some(thread)), config: Mutex::new(config), connected }
+        Self { tx, thread: Mutex::new(Some(thread)), config: Mutex::new(config) }
     }
 
     pub fn config(&self) -> LightingStore {
         self.config.lock().unwrap().clone()
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::SeqCst)
     }
 
     pub fn set_config(&self, config: LightingStore) {
@@ -139,7 +166,7 @@ impl Engine {
         let _ = self.tx.send(Msg::Config(config));
     }
 
-    /// Stops the thread and hands the device back. Waits until it's done.
+    /// Stops the thread and hands the devices back. Waits until it's done.
     pub fn stop(&self) {
         let _ = self.tx.send(Msg::Stop);
         if let Some(t) = self.thread.lock().unwrap().take() {
@@ -148,20 +175,21 @@ impl Engine {
     }
 }
 
-/// Reads saved lighting. Settings from before presets existed become a
-/// "My settings" preset; anything unreadable falls back to the starter presets.
-pub fn load(path: &Option<PathBuf>, layout: &[ChannelLayout]) -> LightingStore {
+/// Reads saved lighting. Settings from before profiles existed become a
+/// "My settings" profile; anything unreadable falls back to the starter.
+pub fn load(path: &Option<PathBuf>, devices: &Devices) -> LightingStore {
     let text = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
-    let Some(text) = text else { return LightingStore::starter(layout) };
+    let Some(text) = text else { return LightingStore::starter() };
     if let Ok(store) = serde_json::from_str::<LightingStore>(&text) {
-        return store.sanitized(layout);
+        return store.sanitized(&devices.fans, &devices.keyboard);
     }
-    let mut store = LightingStore::starter(layout);
+    let mut store = LightingStore::starter();
     if let Ok(old) = serde_json::from_str::<Layer>(&text) {
         let layer = Layer { name: "Main".into(), ..old };
-        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer] });
+        let keyboard = store.profiles[0].keyboard.clone();
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard });
     }
-    store.sanitized(layout)
+    store.sanitized(&devices.fans, &devices.keyboard)
 }
 
 fn save(path: &Option<PathBuf>, cfg: &LightingStore) {

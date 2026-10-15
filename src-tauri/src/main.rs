@@ -2,9 +2,10 @@
 
 mod engine;
 
-use engine::Engine;
+use engine::{Devices, Engine};
 use hidapi::HidApi;
-use prism_core::effects::{ChannelLayout, LightingStore};
+use prism_core::effects::{ChannelLayout, LightingStore, Surface};
+use prism_core::k65_mini::{self, Key};
 use prism_core::{find_devices, DeviceKind, CORSAIR_VID};
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
@@ -55,29 +56,30 @@ fn list_devices() -> Result<Vec<DeviceInfo>, String> {
 struct AppState {
     engine: Engine,
     layout: Vec<ChannelLayout>,
+    fans: Surface,
+    keyboard: Surface,
+    keys: Vec<Key>,
 }
 
 #[derive(Serialize)]
 struct LightingState {
     store: LightingStore,
+    /// The Lighting Node Pro's fans.
     layout: Vec<ChannelLayout>,
-    connected: bool,
+    /// The K65's keys, in LED order.
+    keys: Vec<Key>,
 }
 
 #[tauri::command]
 fn get_lighting(state: State<AppState>) -> LightingState {
-    LightingState {
-        store: state.engine.config(),
-        layout: state.layout.clone(),
-        connected: state.engine.is_connected(),
-    }
+    LightingState { store: state.engine.config(), layout: state.layout.clone(), keys: state.keys.clone() }
 }
 
-/// Applies new lighting settings (all presets). Returns them with anything
+/// Applies new lighting settings (all profiles). Returns them with anything
 /// out of range fixed.
 #[tauri::command]
 fn set_lighting(state: State<AppState>, store: LightingStore) -> LightingStore {
-    let store = store.sanitized(&state.layout);
+    let store = store.sanitized(&state.fans, &state.keyboard);
     state.engine.set_config(store.clone());
     store
 }
@@ -95,9 +97,12 @@ fn main() {
             // ~/.config/io.github.honeybadger.prism/lighting.json
             let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
             let layout = node_layout();
-            let config = engine::load(&save_to, &layout);
-            let engine = Engine::spawn(app.handle().clone(), config, layout.clone(), save_to);
-            app.manage(AppState { engine, layout });
+            let keys = k65_mini::keys();
+            let devices = Devices { fans: Surface::fans(&layout), keyboard: k65_mini::surface(&keys), keys: keys.clone() };
+            let (fans, keyboard) = (devices.fans.clone(), devices.keyboard.clone());
+            let config = engine::load(&save_to, &devices);
+            let engine = Engine::spawn(app.handle().clone(), config, devices, save_to);
+            app.manage(AppState { engine, layout, fans, keyboard, keys });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![list_devices, get_lighting, set_lighting])

@@ -346,3 +346,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 @keyframes fx-cycle { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
 @keyframes fx-strobe { 0% { opacity: 1; } 30% { opacity: .08; } }
 @media (prefers-reduced-motion: reduce) { .fx-thumb { animation: none !important; } }
+
+/* keyboard preview is wider than tall */
+.node-lighting.keyboard #fans { height: auto; aspect-ratio: 3.3 / 1; max-height: 460px; }

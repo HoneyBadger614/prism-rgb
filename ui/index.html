@@ -74,11 +74,11 @@
                 <div class="fan-labels" id="fan-labels"></div>
 
                 <div class="select-bar">
-                  <span class="label">Select LEDs</span>
+                  <span class="label" id="select-label">Select LEDs</span>
                   <div class="chips" id="select-chips"></div>
                   <span class="sel-count" id="sel-count"></span>
                 </div>
-                <p class="hint">Click LEDs in the preview, or drag a box around them. Hold Shift to add more.</p>
+                <p class="hint" id="select-hint"></p>
 
                 <div class="paint-bar" id="paint-bar" hidden>
                   <span class="label">Paint selection</span>
@@ -100,7 +100,7 @@
             <!-- Selected layer settings -->
             <section class="controls" aria-label="Layer settings">
               <div class="no-layer" id="no-layer" hidden>
-                <p>No effects yet. Add one to light up your fans.</p>
+                <p>No effects yet. Add one to start.</p>
                 <button class="btn" id="no-layer-add">Add effect</button>
               </div>
 

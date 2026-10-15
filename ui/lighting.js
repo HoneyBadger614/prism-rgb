@@ -1,5 +1,6 @@
-// Prism lighting screen for the Lighting Node Pro: profiles, layers, LED
-// selection and painting, the effect picker, and the layer editor.
+// Prism lighting screen for the Lighting Node Pro and the K65 keyboard:
+// profiles, layers, LED selection and painting, the effect picker, and the
+// layer editor. The same screen serves both; `dev` says which is showing.
 // Uses `invoke`, `$` and `el` from app.js.
 "use strict";
 
@@ -16,7 +17,7 @@ const Lighting = (() => {
   const EFFECTS = {
     static: { name: "Static", desc: "One solid color", c1: "Color", start: { color1: PURPLE } },
     gradient: { name: "Gradient", desc: "One color fading into another", c1: "From", c2: "To", spread: true, start: { color1: PURPLE, color2: PINK } },
-    wave: { name: "Wave", desc: "A gradient that flows around the fans", c1: "Color 1", c2: "Color 2", spread: true, speed: true, start: { color1: PURPLE, color2: PINK } },
+    wave: { name: "Wave", desc: "A gradient that keeps flowing", c1: "Color 1", c2: "Color 2", spread: true, speed: true, start: { color1: PURPLE, color2: PINK } },
     breathe: { name: "Breathe", desc: "Slowly fades in and out", c1: "Color 1", c2: "Color 2", speed: true, start: { color1: PURPLE, color2: PINK, speed: 3 } },
     rainbow: { name: "Rainbow", desc: "Every color, flowing", spread: true, speed: true, start: { speed: 4 } },
     "color-cycle": { name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
@@ -33,8 +34,9 @@ const Lighting = (() => {
     check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
   };
 
-  let light = null;          // { store, layout }
-  let frame = [];            // latest colors sent to the device, per channel
+  let light = null;          // { store, layout (fans), keys (keyboard) }
+  let frame = { node: [], keyboard: [] }; // latest colors sent to each device
+  let dev = "node";          // which device is showing: "node" or "keyboard"
   let selection = new Set(); // "channel:index"
   let layerIndex = 0;        // layer being edited, in the active profile
   let activeSlot = "color1";
@@ -49,20 +51,40 @@ const Lighting = (() => {
   /* ---------- state helpers ---------- */
 
   const profile = () => light.store.profiles[light.store.active];
-  const layer = () => profile().layers[layerIndex];
+  // The showing device's layers in the active profile.
+  const stack = () => profile()[dev === "node" ? "layers" : "keyboard"];
+  const layer = () => stack()[layerIndex];
   const key = (c, i) => `${c}:${i}`;
   const ref = (k) => k.split(":").map(Number);
 
   function allLeds() {
+    if (dev === "keyboard") return light.keys.map((_, i) => key(0, i));
     const out = [];
     light.layout.forEach((ch, c) => {
-      for (let i = 0; i < ch.fans * (ch.inner + ch.outer); i++) out.push(key(c, i));
+      for (let i = 0; i < ch.fans * (ch.inner + ch.outer); i++) out.push(key(0 + c, i));
     });
     return out;
   }
 
-  // Named groups: All, Hubs, Rings, Fan 1, Fan 2...
+  const MODIFIERS = new Set(["Tab", "Caps", "Shift", "Ctrl", "Win", "Alt", "Fn", "Menu"]);
+
+  // Named groups of keys for the keyboard.
+  function keyGroups() {
+    const pick = (test) => light.keys.flatMap((k, i) => (test(k) ? [key(0, i)] : []));
+    return [
+      ["All", allLeds()],
+      ["WASD", pick((k) => ["W", "A", "S", "D"].includes(k.label))],
+      ["Letters", pick((k) => /^[A-Z]$/.test(k.label))],
+      ["Number row", pick((k) => k.row === 0 && /^[0-9]$/.test(k.label))],
+      ["Modifiers", pick((k) => MODIFIERS.has(k.label))],
+      ["Space bar", pick((k) => k.row === 4 && (k.label === "Space" || k.label === ""))],
+      ["Esc", pick((k) => k.label === "Esc")],
+    ];
+  }
+
+  // Named groups: All, Hubs, Rings, Fan 1, Fan 2... (or key groups).
   function groups() {
+    if (dev === "keyboard") return keyGroups();
     const g = [["All", allLeds()], ["Hubs", []], ["Rings", []]];
     let fanNo = 0;
     light.layout.forEach((ch, c) => {
@@ -85,12 +107,14 @@ const Lighting = (() => {
   const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 
   function describeTarget(target) {
-    if (target.kind === "all") return "All LEDs";
+    if (target.kind === "all") return dev === "keyboard" ? "All keys" : "All LEDs";
     const leds = target.leds.map(([c, i]) => key(c, i));
     if (!leds.length) return "No LEDs";
-    for (const [name, set] of groups()) if (sameSet(leds, set)) return name === "All" ? "All LEDs" : name;
-    return `${leds.length} LED${leds.length === 1 ? "" : "s"}`;
+    for (const [name, set] of groups()) if (sameSet(leds, set)) return name === "All" ? describeTarget({ kind: "all" }) : name;
+    return `${leds.length} ${unit(leds.length)}`;
   }
+
+  const unit = (n) => (dev === "keyboard" ? (n === 1 ? "key" : "keys") : n === 1 ? "LED" : "LEDs");
 
   function send() {
     // Coalesce rapid changes (slider drags) into one update per screen refresh.
@@ -121,7 +145,7 @@ const Lighting = (() => {
   }
 
   function pushLayers(layers) {
-    const list = profile().layers;
+    const list = stack();
     for (const l of layers) if (list.length < 32) list.push(l);
     layerIndex = list.length - 1;
     activeSlot = "color1";
@@ -129,7 +153,32 @@ const Lighting = (() => {
     changed();
   }
 
-  // Ready-made multi-layer looks. Each returns the layers to add.
+  // Ready-made multi-layer looks for the keyboard.
+  const KEY_COMBOS = [
+    {
+      name: "WASD glow", desc: "Ember fade with bright white WASD keys",
+      thumb: `radial-gradient(circle, ${WHITE} 0 18%, transparent 20%), linear-gradient(90deg, ${PURPLE}, ${PINK})`,
+      layers: () => [
+        newLayer("gradient", { name: "Ember fade" }),
+        newLayer("static", { name: "WASD", color1: WHITE, target: ledsTarget(group("WASD")) }),
+      ],
+    },
+    {
+      name: "Ember rows", desc: "Purple at the top fading to pink at the bottom",
+      thumb: `linear-gradient(180deg, ${PURPLE}, ${PINK})`,
+      layers: () => [newLayer("gradient", { name: "Ember rows", spread: "per-fan" })],
+    },
+    {
+      name: "Rainbow & pink keys", desc: "Rainbow wave with hot pink modifiers",
+      thumb: `linear-gradient(90deg, ${PINK} 0 15%, transparent 15% 85%, ${PINK} 85%), linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)`,
+      layers: () => [
+        newLayer("rainbow", { name: "Rainbow" }),
+        newLayer("static", { name: "Modifiers", color1: PINK, target: ledsTarget(group("Modifiers")) }),
+      ],
+    },
+  ];
+
+  // Ready-made multi-layer looks for the fans. Each returns the layers to add.
   const COMBOS = [
     {
       name: "Hub & Ring", desc: "White hubs, flowing purple and pink rings",
@@ -198,7 +247,7 @@ const Lighting = (() => {
       b.append(check, el("span", null, p.name));
       b.addEventListener("click", () => {
         light.store.active = i;
-        layerIndex = Math.max(0, profile().layers.length - 1);
+        layerIndex = Math.max(0, stack().length - 1);
         hsv = null;
         closeMenu();
         changed();
@@ -225,7 +274,7 @@ const Lighting = (() => {
     if (light.store.profiles.length >= 50) return;
     light.store.profiles.splice(light.store.active + 1, 0, p);
     light.store.active += 1;
-    layerIndex = Math.max(0, p.layers.length - 1);
+    layerIndex = Math.max(0, stack().length - 1);
     hsv = null;
     changed();
   }
@@ -257,7 +306,7 @@ const Lighting = (() => {
     const l = layer();
     $("fx-title").textContent = mode === "add" ? "Add effect" : "Change effect";
     $("fx-sub").textContent = mode === "add"
-      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected LED${selection.size === 1 ? "" : "s"}` : "all LEDs"}.`
+      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)}` : `all ${unit(2)}`}.`
       : `For the layer “${l.name}”. Its colors and LEDs stay the same.`;
     $("fx-combos-wrap").hidden = mode !== "add";
 
@@ -282,7 +331,7 @@ const Lighting = (() => {
       return card;
     }));
 
-    $("fx-combos").replaceChildren(...COMBOS.map((c) => {
+    $("fx-combos").replaceChildren(...(dev === "keyboard" ? KEY_COMBOS : COMBOS).map((c) => {
       const card = el("button", "fx-card");
       const t = el("span", "fx-thumb");
       t.style.background = c.thumb;
@@ -302,7 +351,7 @@ const Lighting = (() => {
   /* ---------- layers ---------- */
 
   function renderLayers() {
-    const layers = profile().layers;
+    const layers = stack();
     layerIndex = Math.min(layerIndex, Math.max(0, layers.length - 1));
     const rows = [];
     // Show the top layer (painted last) first.
@@ -377,11 +426,14 @@ const Lighting = (() => {
   }
 
   function paint(hex) {
-    const n = profile().layers.filter((l) => l.name.startsWith("Paint")).length + 1;
+    const n = stack().filter((l) => l.name.startsWith("Paint")).length + 1;
     pushLayers([newLayer("static", { name: `Paint ${n}`, color1: hex, target: ledsTarget([...selection]) })]);
   }
 
   function hitTest(x, y) {
+    if (dev === "keyboard") {
+      return spots.find((s) => x >= s.rect[0] && x <= s.rect[0] + s.rect[2] && y >= s.rect[1] && y <= s.rect[1] + s.rect[3]) || null;
+    }
     let best = null, bestD = 18 * 18;
     for (const s of spots) {
       const d = (s.x - x) ** 2 + (s.y - y) ** 2;
@@ -449,6 +501,7 @@ const Lighting = (() => {
   function drawFans() {
     const canvas = $("fans");
     if (!light || canvas.offsetParent === null) return;
+    if (dev === "keyboard") return drawKeyboard(canvas);
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     canvas.width = Math.round(w * dpr);
@@ -479,7 +532,7 @@ const Lighting = (() => {
       const step = (Math.PI * 2) / count;
       for (let k = 0; k < count; k++) {
         const i = fan.base + first + k;
-        const color = (frame[fan.c] || [])[i] || "#000000";
+        const color = (frame.node[fan.c] || [])[i] || "#000000";
         const a = -Math.PI / 2 + k * step;
         ctx.strokeStyle = color;
         ctx.shadowColor = color;
@@ -548,9 +601,93 @@ const Lighting = (() => {
     }
 
     const labels = $("fan-labels");
+    labels.hidden = false;
     if (labels.childElementCount !== fans.length) {
       labels.style.gridTemplateColumns = `repeat(${fans.length}, 1fr)`;
       labels.replaceChildren(...fans.map((_, i) => el("span", null, `Fan ${i + 1}`)));
+    }
+  }
+
+  // The K65, key by key. Each key glows in the color the keyboard was sent.
+  function drawKeyboard(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    $("fan-labels").hidden = true;
+
+    const css = getComputedStyle(document.documentElement);
+    const body = css.getPropertyValue("--surface").trim();
+    const edge = css.getPropertyValue("--line").trim();
+    const raised = css.getPropertyValue("--raised").trim();
+    const muted = css.getPropertyValue("--muted").trim();
+    const accent = css.getPropertyValue("--accent").trim();
+    const font = css.getPropertyValue("--font-mono").trim();
+
+    // 60 quarter-units across, 5 rows; keep keys square-ish and centered.
+    const pad = 14;
+    const u = Math.min((w - pad * 2) / 60, (h - pad * 2) / 20);
+    const ox = (w - u * 60) / 2, oy = (h - u * 20) / 2;
+    const gap = Math.max(2, u * 0.35);
+
+    // the keyboard case
+    ctx.fillStyle = body;
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(ox - pad * 0.7, oy - pad * 0.7, u * 60 + pad * 1.4, u * 20 + pad * 1.4, 12); ctx.fill(); ctx.stroke();
+
+    spots = [];
+    const marks = [];
+    light.keys.forEach((k, i) => {
+      const x = ox + k.x * u + gap / 2, y = oy + k.row * 4 * u + gap / 2;
+      const kw = k.w * u - gap, kh = 4 * u - gap;
+      const color = frame.keyboard[i] || "#000000";
+
+      // glow under the key, then the keycap with a lit edge
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.roundRect(x, y, kw, kh, 5); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = raised;
+      ctx.beginPath(); ctx.roundRect(x + 2, y + 2, kw - 4, kh - 6, 4); ctx.fill();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.28;
+      ctx.beginPath(); ctx.roundRect(x + 2, y + 2, kw - 4, kh - 6, 4); ctx.fill();
+      ctx.globalAlpha = 1;
+
+      if (k.label) {
+        ctx.fillStyle = muted;
+        ctx.font = `${Math.max(9, u * 1.15)}px ${font}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(k.label, x + kw / 2, y + kh / 2 - 2);
+      }
+
+      const s = { key: key(0, i), x: x + kw / 2, y: y + kh / 2, rect: [x, y, kw, kh] };
+      spots.push(s);
+      if (selection.has(s.key)) marks.push(s);
+    });
+
+    for (const s of marks) {
+      const [x, y, kw, kh] = s.rect;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x - 2, y - 2, kw + 4, kh + 4, 6); ctx.stroke();
+    }
+
+    if (drag && drag.moved) {
+      ctx.fillStyle = "rgba(255,45,149,0.12)";
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
+      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.setLineDash([]);
     }
   }
 
@@ -566,7 +703,7 @@ const Lighting = (() => {
 
     const name = $("layer-name");
     if (document.activeElement !== name) name.value = l.name;
-    $("editing-target").textContent = `Layer · lit on ${target === "All LEDs" ? "all LEDs" : target}`;
+    $("editing-target").textContent = `Layer · lit on ${l.target.kind === "all" ? target.toLowerCase() : target}`;
 
     const t = $("effect-thumb");
     t.className = `effect-thumb fx-thumb fx-${l.effect}`;
@@ -577,8 +714,11 @@ const Lighting = (() => {
 
     $("target-desc").textContent = target;
     $("target-all").disabled = l.target.kind === "all";
+    $("target-all").textContent = describeTarget({ kind: "all" });
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.spread === l.spread)));
+    $("spread-across").textContent = dev === "keyboard" ? "Left to right" : "Across fans";
+    $("spread-per-fan").textContent = dev === "keyboard" ? "Top to bottom" : "Per fan";
     $("field-colors").hidden = !fx.c1;
     $("field-spread").hidden = !fx.spread;
     $("field-speed").hidden = !fx.speed;
@@ -703,6 +843,11 @@ const Lighting = (() => {
 
   function renderAll() {
     if (!light) return;
+    $("node-lighting").classList.toggle("keyboard", dev === "keyboard");
+    $("select-label").textContent = dev === "keyboard" ? "Select keys" : "Select LEDs";
+    $("select-hint").textContent = dev === "keyboard"
+      ? "Click keys on the keyboard, or drag a box around them. Hold Shift to add more."
+      : "Click LEDs in the preview, or drag a box around them. Hold Shift to add more.";
     renderProfiles();
     $("master").value = light.store.brightness;
     $("master").style.setProperty("--fill", `${light.store.brightness}%`);
@@ -737,7 +882,11 @@ const Lighting = (() => {
     // New and duplicated profiles open straight into renaming, name selected.
     $("profile-new").addEventListener("click", () => {
       renaming = true;
-      addProfile({ name: `Profile ${light.store.profiles.length + 1}`, layers: [newLayer("gradient", { name: "Ember fade" })] });
+      addProfile({
+        name: `Profile ${light.store.profiles.length + 1}`,
+        layers: [newLayer("gradient", { name: "Ember fade" })],
+        keyboard: [newLayer("gradient", { name: "Ember fade" })],
+      });
     });
     $("profile-dup").addEventListener("click", () => {
       const copy = structuredClone(profile());
@@ -757,7 +906,7 @@ const Lighting = (() => {
       deleteArmed = null;
       light.store.profiles.splice(light.store.active, 1);
       light.store.active = Math.min(light.store.active, light.store.profiles.length - 1);
-      layerIndex = Math.max(0, profile().layers.length - 1);
+      layerIndex = Math.max(0, stack().length - 1);
       hsv = null;
       closeMenu();
       changed();
@@ -766,8 +915,8 @@ const Lighting = (() => {
 
   async function init() {
     const state = await invoke("get_lighting");
-    light = { store: state.store, layout: state.layout };
-    layerIndex = Math.max(0, profile().layers.length - 1);
+    light = { store: state.store, layout: state.layout, keys: state.keys };
+    layerIndex = Math.max(0, stack().length - 1);
 
     $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));
     $("paint-swatches").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(`Paint ${n.toLowerCase()}`, hex, () => paint(hex))));
@@ -807,5 +956,17 @@ const Lighting = (() => {
     window.addEventListener("resize", drawFans);
   }
 
-  return { init, show: renderAll };
+  // Show the lighting screen for "node" (fans) or "keyboard".
+  function show(which) {
+    if (which !== dev) {
+      dev = which;
+      selection.clear();
+      layerIndex = Math.max(0, stack().length - 1);
+      activeSlot = "color1";
+      hsv = null;
+    }
+    renderAll();
+  }
+
+  return { init, show };
 })();

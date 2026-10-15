@@ -170,9 +170,111 @@ impl K65Mini {
     }
 }
 
+/// One key on the screen: its label, the LED slots it lights, and where it
+/// sits (row 0 is the number row; `x` and `w` are in quarter-key units, 60
+/// across).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Key {
+    pub label: &'static str,
+    pub slots: &'static [u8],
+    pub row: u8,
+    pub x: u8,
+    pub w: u8,
+}
+
+/// The K65 RGB Mini, US layout. Widths in quarter-keys: a normal key is 4.
+/// The space bar is split into its three LEDs.
+const ROWS: [&[(&str, &[u8], u8)]; 5] = [
+    &[
+        ("Esc", &[41], 4), ("1", &[30], 4), ("2", &[31], 4), ("3", &[32], 4), ("4", &[33], 4),
+        ("5", &[34], 4), ("6", &[35], 4), ("7", &[36], 4), ("8", &[37], 4), ("9", &[38], 4),
+        ("0", &[39], 4), ("-", &[45], 4), ("=", &[46], 4), ("Backspace", &[42], 8),
+    ],
+    &[
+        ("Tab", &[43], 6), ("Q", &[20], 4), ("W", &[26], 4), ("E", &[8], 4), ("R", &[21], 4),
+        ("T", &[23], 4), ("Y", &[28], 4), ("U", &[24], 4), ("I", &[12], 4), ("O", &[18], 4),
+        ("P", &[19], 4), ("[", &[47], 4), ("]", &[48], 4),
+        // US backslash; 50 is the same key's slot on UK boards, lit too to be safe
+        ("\\", &[49, 50], 6),
+    ],
+    &[
+        ("Caps", &[57], 7), ("A", &[4], 4), ("S", &[22], 4), ("D", &[7], 4), ("F", &[9], 4),
+        ("G", &[10], 4), ("H", &[11], 4), ("J", &[13], 4), ("K", &[14], 4), ("L", &[15], 4),
+        (";", &[51], 4), ("'", &[52], 4), ("Enter", &[40], 9),
+    ],
+    &[
+        ("Shift", &[106], 9), ("Z", &[29], 4), ("X", &[27], 4), ("C", &[6], 4), ("V", &[25], 4),
+        ("B", &[5], 4), ("N", &[17], 4), ("M", &[16], 4), (",", &[54], 4), (".", &[55], 4),
+        ("/", &[56], 4), ("Shift", &[110], 11),
+    ],
+    &[
+        ("Ctrl", &[105], 5), ("Win", &[108], 5), ("Alt", &[107], 5),
+        ("", &[0], 8), ("Space", &[44], 9), ("", &[1], 8),
+        ("Alt", &[111], 5), ("Fn", &[122], 5), ("Menu", &[101], 5), ("Ctrl", &[109], 5),
+    ],
+];
+
+/// Every key, in order. A key's position in this list is its LED index in
+/// lighting layers (channel 0).
+pub fn keys() -> Vec<Key> {
+    let mut out = Vec::new();
+    for (row, keys) in ROWS.iter().enumerate() {
+        let mut x = 0;
+        for &(label, slots, w) in keys.iter() {
+            out.push(Key { label, slots, row: row as u8, x, w });
+            x += w;
+        }
+    }
+    out
+}
+
+/// Where each key sits, for effects.
+pub fn surface(keys: &[Key]) -> crate::effects::Surface {
+    let pts: Vec<(f64, f64)> = keys.iter().map(|k| (k.x as f64 + k.w as f64 / 2.0, k.row as f64 * 4.0)).collect();
+    crate::effects::Surface::grid(&pts)
+}
+
+/// Turns one color per key into the keyboard's slot colors.
+pub fn slot_colors(keys: &[Key], colors: &[Rgb]) -> [Rgb; SLOTS] {
+    let mut out = [Rgb::new(0, 0, 0); SLOTS];
+    for (k, &c) in keys.iter().zip(colors) {
+        for &s in k.slots {
+            out[s as usize] = c;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_rows_are_full_width_and_slots_unique() {
+        let keys = keys();
+        for row in 0..5 {
+            let width: u32 = keys.iter().filter(|k| k.row == row).map(|k| k.w as u32).sum();
+            assert_eq!(width, 60, "row {row}");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for k in &keys {
+            for &s in k.slots {
+                assert!((s as usize) < SLOTS);
+                assert!(seen.insert(s), "slot {s} used twice");
+            }
+        }
+        assert_eq!(keys.len(), 63);
+    }
+
+    #[test]
+    fn slot_colors_follow_keys() {
+        let keys = keys();
+        let mut colors = vec![Rgb::new(0, 0, 0); keys.len()];
+        colors[0] = Rgb::new(9, 9, 9); // Esc
+        let out = slot_colors(&keys, &colors);
+        assert_eq!(out[41], Rgb::new(9, 9, 9));
+        assert_eq!(out.iter().filter(|c| c.r == 9).count(), 1);
+    }
 
     #[test]
     fn color_report_layout() {

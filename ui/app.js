@@ -125,12 +125,12 @@ function render() {
   document.querySelector(".tabs").hidden = onlyLighting;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.t === tab)));
 
-  const nodeLighting = d.kind === "lighting" && tab === "light";
+  const nodeLighting = (d.kind === "lighting" || d.kind === "keyboard") && tab === "light";
   $("node-lighting").hidden = !nodeLighting;
   $("visual").hidden = nodeLighting;
   $("soon").hidden = nodeLighting;
   if (nodeLighting) {
-    Lighting.show();
+    Lighting.show(d.kind === "keyboard" ? "keyboard" : "node");
     return;
   }
   $("soon").innerHTML = SOON[tab];

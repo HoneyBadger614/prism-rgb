@@ -116,6 +116,15 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     KnownModel { pid: 0x0c0b, name: "Lighting Node Pro", kind: DeviceKind::LightingController },
 ];
 
+/// Whether the Prism app is running. The test tools refuse to talk to devices
+/// while it is: two programs talking to one device get each other's answers.
+pub fn prism_app_running() -> bool {
+    let Ok(procs) = std::fs::read_dir("/proc") else { return false };
+    procs.flatten().any(|p| {
+        std::fs::read_to_string(p.path().join("comm")).is_ok_and(|c| c.trim() == "prism-rgb")
+    })
+}
+
 pub fn lookup_model(pid: u16) -> Option<&'static KnownModel> {
     KNOWN_MODELS.iter().find(|m| m.pid == pid)
 }

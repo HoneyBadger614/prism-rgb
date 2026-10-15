@@ -19,6 +19,10 @@ const PURPLE: Rgb = Rgb::new(0x7c, 0x3a, 0xed);
 const HOT_PINK: Rgb = Rgb::new(0xff, 0x2d, 0x95);
 
 fn main() {
+    if prism_core::prism_app_running() {
+        eprintln!("Prism is running. Quit it first (tray icon -> Quit Prism): two programs talking to one device get mixed up.");
+        std::process::exit(1);
+    }
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         std::process::exit(1);

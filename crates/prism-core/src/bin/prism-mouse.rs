@@ -25,6 +25,10 @@ use prism_core::nightsword::{Nightsword, KEEPALIVE_INTERVAL, ZONES, ZONE_COUNT};
 use prism_core::Rgb;
 
 fn main() {
+    if prism_core::prism_app_running() {
+        eprintln!("Prism is running. Quit it first (tray icon -> Quit Prism): two programs talking to one device get mixed up.");
+        std::process::exit(1);
+    }
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         std::process::exit(1);

@@ -7,6 +7,7 @@
 //!   prism-kb backup DIR    copy every onboard file into DIR (read-only)
 //!   prism-kb rewrite 6d6a  write one onboard file back with its OWN contents,
 //!                          then read it again and compare (tests writing)
+//!   prism-kb write 6d6a FILE   replace onboard file 6d6a with FILE's bytes
 //!
 //! When time is up the keyboard goes back to its own lighting. Typing keeps
 //! working the whole time.
@@ -18,6 +19,10 @@ use prism_core::k65_mini::{K65Mini, KEEPALIVE_INTERVAL, SLOTS};
 use prism_core::Rgb;
 
 fn main() {
+    if prism_core::prism_app_running() {
+        eprintln!("Prism is running. Quit it first (tray icon -> Quit Prism): two programs talking to one device get mixed up.");
+        std::process::exit(1);
+    }
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         std::process::exit(1);
@@ -46,6 +51,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => println!("  file {id:#06x}: {e}"),
             }
         }
+        return Ok(());
+    }
+    if what == "write" {
+        let arg = args.next().ok_or("give a file number, e.g. 6d6a")?;
+        let id = u16::from_str_radix(arg.trim_start_matches("0x"), 16).map_err(|_| format!("'{arg}' isn't a file number"))?;
+        let data = std::fs::read(args.next().ok_or("give a file to write")?)?;
+        let kb = K65Mini::open_with(&api, false)?;
+        kb.write_file(id, &data)?;
+        let after = kb.read_file(id)?;
+        println!("wrote file {id:#06x}: now {}", hex(&after));
         return Ok(());
     }
     if what == "rewrite" {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/prism-core", "src-tauri"]
+members = ["crates/prism-core", "crates/prism-input", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

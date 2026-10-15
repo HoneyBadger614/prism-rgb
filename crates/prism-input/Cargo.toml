@@ -1,0 +1,10 @@
+[package]
+name = "prism-input"
+description = "Prism's input layer: reads Corsair keyboards and mice and remaps their keys and buttons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+evdev = "0.12"

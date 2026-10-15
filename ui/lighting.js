@@ -1134,5 +1134,6 @@ const Lighting = (() => {
     profile: () => profile(),
     save: () => { send(); renderProfiles(); },
     onChange: (fn) => listeners.push(fn),
+    drawKeyLabel,
   };
 })();

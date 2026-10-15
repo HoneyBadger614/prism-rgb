@@ -111,24 +111,7 @@ const Bindings = (() => {
     $("bind-mouse").hidden = dev !== "mouse";
 
     if (dev === "keyboard") {
-      const seen = new Set();
-      $("bind-kb").replaceChildren(...Lighting.state().keys.map((k) => {
-        const b = el("button", "bkey");
-        b.style.gridColumn = `span ${k.w}`;
-        b.style.gridRow = String(k.row + 1);
-        const bound = k.code && find(k.code);
-        if (bound) b.classList.add("bound");
-        if (k.code && k.code === picked && !seen.has(k.code)) b.classList.add("sel");
-        b.append(el("span", null, k.label));
-        if (bound && !seen.has(k.code)) b.append(el("span", "to", describe(bound.action)));
-        if (k.code) seen.add(k.code);
-        if (!k.code) {
-          b.disabled = true;
-          b.title = "Fn is handled by the keyboard itself";
-        }
-        b.addEventListener("click", () => pick(k.code));
-        return b;
-      }));
+      drawBindKeyboard();
     } else {
       const card = ({ name, code, standard }) => {
         const bound = find(code);
@@ -149,6 +132,88 @@ const Bindings = (() => {
       $("bind-mouse-top").replaceChildren(...all.filter((b) => !SIDE_BUTTONS.has(b.name)).map(card));
       $("bind-mouse-side").replaceChildren(...all.filter((b) => SIDE_BUTTONS.has(b.name)).map(card));
     }
+  }
+
+  // The K65 drawn like on the Lighting tab, minus the glow: bound keys get a
+  // pink edge and their new action under the label; the picked key a white
+  // outline.
+  let keySpots = [];
+  function drawBindKeyboard() {
+    const canvas = $("bind-kb");
+    if (!canvas || canvas.offsetParent === null) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const css = getComputedStyle(document.documentElement);
+    const v = (n) => css.getPropertyValue(n).trim();
+    const [body, edge, raised, muted, text, accent, font] =
+      [v("--surface"), v("--line"), v("--raised"), v("--muted"), v("--text"), v("--accent"), v("--font-mono")];
+
+    const pad = 14;
+    const u = Math.min((w - pad * 2) / 60, (h - pad * 2) / 20);
+    const ox = (w - u * 60) / 2, oy = (h - u * 20) / 2;
+    const gap = Math.max(2, u * 0.35);
+
+    ctx.fillStyle = body;
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(ox - pad * 0.7, oy - pad * 0.7, u * 60 + pad * 1.4, u * 20 + pad * 1.4, 12); ctx.fill(); ctx.stroke();
+
+    keySpots = [];
+    const seen = new Set();
+    for (const k of Lighting.state().keys) {
+      const x = ox + k.x * u + gap / 2, y = oy + k.row * 4 * u + gap / 2;
+      const kw = k.w * u - gap, kh = 4 * u - gap;
+      const bound = k.code ? find(k.code) : null;
+      const first = !seen.has(k.code);
+      if (k.code) seen.add(k.code);
+
+      ctx.globalAlpha = k.code ? 1 : 0.35;
+      ctx.fillStyle = raised;
+      ctx.beginPath(); ctx.roundRect(x, y, kw, kh, 5); ctx.fill();
+      if (bound) {
+        // pink tint over the keycap
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.14;
+        ctx.beginPath(); ctx.roundRect(x, y, kw, kh, 5); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.strokeStyle = bound ? accent : edge;
+      ctx.lineWidth = bound ? 1.5 : 1;
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, kw - 1, kh - 1, 5); ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      const hasTo = bound && first;
+      if (k.label) Lighting.drawKeyLabel(ctx, k.label, x, hasTo ? y - kh * 0.14 : y, kw, kh, u, bound ? text : muted, font);
+      if (hasTo) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(x + 2, y + 2, kw - 4, kh - 4); ctx.clip();
+        let size = Math.max(7, u * 0.8);
+        ctx.font = `${size}px ${font}`;
+        let label = describe(bound.action);
+        while (ctx.measureText(label).width > kw - 6 && label.length > 2) label = label.slice(0, -2) + "…";
+        ctx.fillStyle = accent;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x + kw / 2, y + kh * 0.72);
+        ctx.restore();
+      }
+      if (k.code && k.code === picked && first) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(x - 2, y - 2, kw + 4, kh + 4, 6); ctx.stroke();
+      }
+      keySpots.push({ code: k.code, rect: [x, y, kw, kh] });
+    }
+  }
+
+  function keyAt(px, py) {
+    return keySpots.find(({ rect: [x, y, w, h] }) => px >= x && px <= x + w && py >= y && py <= y + h);
   }
 
   function pick(code, keepMessage) {
@@ -496,6 +561,19 @@ const Bindings = (() => {
       renderApps(find(picked)?.action.app);
     });
     Lighting.onChange(() => { if (!$("bindings-view").hidden) render(); });
+
+    const kb = $("bind-kb");
+    kb.addEventListener("click", (e) => {
+      const r = kb.getBoundingClientRect();
+      const hit = keyAt(e.clientX - r.left, e.clientY - r.top);
+      if (hit && hit.code) pick(hit.code);
+    });
+    kb.addEventListener("mousemove", (e) => {
+      const r = kb.getBoundingClientRect();
+      const hit = keyAt(e.clientX - r.left, e.clientY - r.top);
+      kb.style.cursor = hit && hit.code ? "pointer" : "default";
+    });
+    window.addEventListener("resize", () => { if (dev === "keyboard" && !$("bindings-view").hidden) drawBindKeyboard(); });
 
     document.querySelectorAll("[data-op]").forEach((x) => x.addEventListener("click", () => setBinding({ kind: "dpi", op: x.dataset.op })));
 

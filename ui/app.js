@@ -46,6 +46,15 @@ document.querySelectorAll("[data-kb-size]").forEach((b) => b.addEventListener("c
 let savedKbSize = "m";
 try { savedKbSize = localStorage.getItem("prism-kb-size") || "m"; } catch (e) {}
 setKbSize(["s", "m", "l"].includes(savedKbSize) ? savedKbSize : "m");
+
+// When a preview is narrower than the medium size, S / M / L would all look
+// the same, so hide the switch and let the keyboard fill the space.
+const KB_MEDIUM = 760;
+const narrowWatch = new ResizeObserver((entries) => {
+  for (const e of entries) e.target.classList.toggle("kb-narrow", e.contentRect.width < KB_MEDIUM);
+  window.dispatchEvent(new Event("resize"));
+});
+document.querySelectorAll(".preview").forEach((p) => narrowWatch.observe(p));
 let devices = [];
 let selected = 0;
 let tab = "light";

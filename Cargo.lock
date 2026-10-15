@@ -2302,6 +2302,8 @@ name = "prism-core"
 version = "0.1.0"
 dependencies = [
  "hidapi",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2311,6 +2313,7 @@ dependencies = [
  "hidapi",
  "prism-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]

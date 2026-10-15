@@ -1,8 +1,23 @@
 // Prism desktop app: the window and the bridge between the screen and prism-core.
 
+mod engine;
+
+use engine::Engine;
 use hidapi::HidApi;
+use prism_core::effects::{ChannelLayout, LightingConfig};
 use prism_core::{find_devices, DeviceKind, CORSAIR_VID};
 use serde::Serialize;
+use tauri::{Manager, RunEvent, State};
+
+/// What's plugged into the Lighting Node Pro.
+/// Channel 1: three fans, 4 hub + 12 ring LEDs each. Channel 2: nothing (checked
+/// with `prism-light identify 2`). This will move to a settings screen.
+fn node_layout() -> Vec<ChannelLayout> {
+    vec![
+        ChannelLayout::ll_fans(3),
+        ChannelLayout::ll_fans(0),
+    ]
+}
 
 /// What the screen needs to know about one device.
 #[derive(Serialize)]
@@ -37,6 +52,35 @@ fn list_devices() -> Result<Vec<DeviceInfo>, String> {
         .collect())
 }
 
+struct AppState {
+    engine: Engine,
+    layout: Vec<ChannelLayout>,
+}
+
+#[derive(Serialize)]
+struct LightingState {
+    config: LightingConfig,
+    layout: Vec<ChannelLayout>,
+    connected: bool,
+}
+
+#[tauri::command]
+fn get_lighting(state: State<AppState>) -> LightingState {
+    LightingState {
+        config: state.engine.config(),
+        layout: state.layout.clone(),
+        connected: state.engine.is_connected(),
+    }
+}
+
+/// Applies new lighting settings. Returns them with any out-of-range numbers fixed.
+#[tauri::command]
+fn set_lighting(state: State<AppState>, config: LightingConfig) -> LightingConfig {
+    let config = config.sanitized();
+    state.engine.set_config(config.clone());
+    config
+}
+
 fn main() {
     // WebKitGTK's DMA-BUF renderer crashes on NVIDIA under Wayland
     // ("Error 71 (Protocol error)"). Turn it off unless the user chose otherwise.
@@ -45,8 +89,23 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_devices])
-        .run(tauri::generate_context!())
+    let app = tauri::Builder::default()
+        .setup(|app| {
+            // ~/.config/io.github.honeybadger.prism/lighting.json
+            let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
+            let config = engine::load(&save_to);
+            let layout = node_layout();
+            let engine = Engine::spawn(app.handle().clone(), config, layout.clone(), save_to);
+            app.manage(AppState { engine, layout });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![list_devices, get_lighting, set_lighting])
+        .build(tauri::generate_context!())
         .expect("Prism failed to start");
+
+    app.run(|handle, event| {
+        if let RunEvent::Exit = event {
+            handle.state::<AppState>().engine.stop();
+        }
+    });
 }

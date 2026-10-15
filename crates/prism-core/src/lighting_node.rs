@@ -11,7 +11,8 @@
 //! If the device hears nothing for a while it falls back to its own built-in
 //! effect, so callers must send [`LightingNode::keepalive`] every few seconds.
 
-use std::time::Duration;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice};
 
@@ -114,6 +115,9 @@ fn direct_reports(channel: u8, colors: &[Rgb]) -> Vec<[u8; REPORT_LEN]> {
 
 pub struct LightingNode {
     dev: HidDevice,
+    /// When each channel was last switched to software control. Re-sent
+    /// every keepalive interval in case the device dropped back on its own.
+    software_since: Cell<[Option<Instant>; CHANNELS as usize]>,
 }
 
 impl LightingNode {
@@ -126,7 +130,7 @@ impl LightingNode {
             .ok_or(Error::NotFound)?
             .path;
         let c_path = std::ffi::CString::new(path).map_err(|_| Error::NotFound)?;
-        Ok(Self { dev: api.open_path(&c_path)? })
+        Ok(Self { dev: api.open_path(&c_path)?, software_since: Cell::new([None; CHANNELS as usize]) })
     }
 
     /// Sends one command and waits for the device's reply.
@@ -160,7 +164,13 @@ impl LightingNode {
             return Err(Error::TooManyLeds(colors.len()));
         }
         let led: Vec<Rgb> = colors.iter().map(|c| c.to_led()).collect();
-        self.checked(cmd::PORT_STATE, &[channel, port_state::SOFTWARE])?;
+        let mut since = self.software_since.get();
+        let slot = &mut since[channel as usize];
+        if slot.map_or(true, |t| t.elapsed() >= KEEPALIVE_INTERVAL) {
+            self.checked(cmd::PORT_STATE, &[channel, port_state::SOFTWARE])?;
+            *slot = Some(Instant::now());
+            self.software_since.set(since);
+        }
         for r in direct_reports(channel, &led) {
             self.send_report(&r)?;
         }
@@ -185,6 +195,7 @@ impl LightingNode {
         for ch in 0..CHANNELS {
             self.checked(cmd::PORT_STATE, &[ch, port_state::HARDWARE])?;
         }
+        self.software_since.set([None; CHANNELS as usize]);
         self.commit()
     }
 

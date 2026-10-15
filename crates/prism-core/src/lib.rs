@@ -7,7 +7,9 @@
 use std::collections::BTreeMap;
 
 use hidapi::HidApi;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub mod effects;
 pub mod lighting_node;
 
 /// A color, 0–255 per part.
@@ -50,6 +52,29 @@ impl Rgb {
         let t = t.clamp(0.0, 1.0);
         let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
         Rgb::new(f(self.r, other.r), f(self.g, other.g), f(self.b, other.b))
+    }
+
+    /// Dims towards black; `level` = 1 keeps the color, 0 is off.
+    pub fn scale(self, level: f32) -> Rgb {
+        Rgb::new(0, 0, 0).mix(self, level)
+    }
+
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+}
+
+// Colors are stored and sent to the screen as "#rrggbb".
+impl Serialize for Rgb {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Rgb {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Rgb::from_hex(&s).ok_or_else(|| serde::de::Error::custom(format!("'{s}' is not a color like #ff2d95")))
     }
 }
 

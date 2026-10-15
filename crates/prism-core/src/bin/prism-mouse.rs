@@ -8,6 +8,8 @@
 //!   prism-mouse buttons Sniper 15
 //!                            for 15 s, the Sniper button reports to the
 //!                            computer; presses are shown, then it's put back
+//!   prism-mouse dpi 400 1600 3200 800
+//!                            set stages 1-3 and sniper, then try each for 8 s
 //!   prism-mouse reset        just hand lighting back to the mouse
 //!
 //! When time is up the mouse goes back to its own lighting.
@@ -36,7 +38,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mouse = Nightsword::open(&api)?;
     println!("Nightsword RGB found and switched to Prism control.");
 
-    if what == "buttons" {
+    if what == "dpi" {
+        let v: Vec<u16> = args.filter_map(|s| s.parse().ok()).collect();
+        let [a, b, c, sniper] = v[..] else {
+            return Err("give four numbers: stage 1, stage 2, stage 3, sniper".into());
+        };
+        mouse.set_dpi_stages([a, b, c], sniper)?;
+        for (stage, label) in [(1u8, a), (2, b), (3, c), (0, sniper)] {
+            let name = if stage == 0 { "sniper".to_string() } else { format!("stage {stage}") };
+            println!("  {name}: {label} DPI for 8 s - move the mouse");
+            mouse.select_dpi(stage)?;
+            std::thread::sleep(Duration::from_secs(8));
+        }
+        println!("Handing DPI back to the mouse.");
+    } else if what == "buttons" {
         let name = args.next().unwrap_or_else(|| "Sniper".into());
         let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(15);
         let channel = Nightsword::open_buttons(&api)?;

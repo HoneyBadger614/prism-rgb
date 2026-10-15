@@ -29,6 +29,35 @@ mod cmd {
     pub const MODE: u8 = 0x04;
     pub const COLOR: u8 = 0x22;
     pub const BUTTON_SETUP: u8 = 0x40;
+    pub const DPI: u8 = 0x13;
+}
+
+/// DPI the Nightsword supports, and the step Prism uses.
+pub const DPI_MIN: u16 = 100;
+pub const DPI_MAX: u16 = 18000;
+pub const DPI_STEP: u16 = 50;
+
+/// Rounds a DPI to the nearest step, within the mouse's range.
+pub fn clamp_dpi(dpi: u16) -> u16 {
+    let d = dpi.clamp(DPI_MIN, DPI_MAX);
+    ((d + DPI_STEP / 2) / DPI_STEP * DPI_STEP).clamp(DPI_MIN, DPI_MAX)
+}
+
+/// Slots in the DPI table: the sniper DPI, then stages 1-3.
+const DPI_SLOT_SNIPER: u8 = 0xd0;
+const DPI_SLOT_STAGE1: u8 = 0xd1;
+/// Selecting a stage: 1-3, or 0 for sniper.
+const DPI_SELECT: [u8; 2] = [0x02, 0x00];
+
+/// The message defining one DPI slot: same DPI on both axes.
+fn dpi_slot_report(slot: u8, dpi: u16) -> [u8; REPORT_LEN] {
+    let d = clamp_dpi(dpi).to_le_bytes();
+    report(&[cmd::DPI, slot, 0x00, 0x00, d[0], d[1], d[0], d[1], 0, 0, 0])
+}
+
+/// The message switching to a DPI stage (1-3), or sniper (0).
+fn dpi_select_report(stage: u8) -> [u8; REPORT_LEN] {
+    report(&[cmd::DPI, DPI_SELECT[0], DPI_SELECT[1], stage.min(3)])
 }
 
 /// Per-button setting: the mouse handles the button itself (normal), or
@@ -208,6 +237,28 @@ impl Nightsword {
         Ok(())
     }
 
+    /// Sets the three DPI stages and the sniper DPI. Like the button setup,
+    /// this is for while Prism runs; the mouse's own settings come back when
+    /// it's handed back.
+    pub fn set_dpi_stages(&self, stages: [u16; 3], sniper: u16) -> Result<()> {
+        std::thread::sleep(GAP);
+        self.dev.write(&dpi_slot_report(DPI_SLOT_SNIPER, sniper))?;
+        for (i, dpi) in stages.iter().enumerate() {
+            std::thread::sleep(GAP);
+            self.dev.write(&dpi_slot_report(DPI_SLOT_STAGE1 + i as u8, *dpi))?;
+        }
+        std::thread::sleep(GAP);
+        Ok(())
+    }
+
+    /// Switches to DPI stage 1-3, or 0 for the sniper DPI.
+    pub fn select_dpi(&self, stage: u8) -> Result<()> {
+        std::thread::sleep(GAP);
+        self.dev.write(&dpi_select_report(stage))?;
+        std::thread::sleep(GAP);
+        Ok(())
+    }
+
     /// Opens the mouse's button channel, for reading button reports.
     pub fn open_buttons(api: &HidApi) -> Result<HidDevice> {
         let path = find_devices(api)
@@ -287,6 +338,15 @@ mod tests {
         assert_eq!(buttons_held(&d), Some(vec!["Sniper", "Profile Up"]));
         d[0] = 1;
         assert_eq!(buttons_held(&d), None);
+    }
+
+    #[test]
+    fn dpi_messages() {
+        let r = dpi_slot_report(0xd2, 1600);
+        assert_eq!(&r[..13], &[0x00, 0x07, 0x13, 0xd2, 0, 0, 0x40, 0x06, 0x40, 0x06, 0, 0, 0]);
+        assert_eq!(&dpi_select_report(2)[..6], &[0x00, 0x07, 0x13, 0x02, 0x00, 2]);
+        assert_eq!(dpi_select_report(9)[5], 3);
+        assert_eq!((clamp_dpi(20), clamp_dpi(1620), clamp_dpi(65000)), (100, 1600, 18000));
     }
 
     #[test]

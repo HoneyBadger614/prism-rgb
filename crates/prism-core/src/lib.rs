@@ -12,6 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub mod effects;
 pub mod k65_mini;
 pub mod lighting_node;
+pub mod nightsword;
 
 /// A color, 0–255 per part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

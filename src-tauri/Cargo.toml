@@ -1,0 +1,16 @@
+[package]
+name = "prism-rgb"
+description = "Prism: a Linux control center for Corsair devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+prism-core = { path = "../crates/prism-core" }
+hidapi = { version = "2.6", default-features = false, features = ["linux-shared-hidraw"] }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }

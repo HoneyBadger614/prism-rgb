@@ -99,6 +99,8 @@ pub fn find_devices(api: &HidApi) -> Vec<FoundDevice> {
     for d in &mut devices {
         d.interfaces.sort_by_key(|i| (i.number, i.usage_page, i.usage));
     }
+    // Keyboards, then mice, then lighting, then anything unrecognized.
+    devices.sort_by_key(|d| (d.model.map_or(3, |m| m.kind as u8), d.pid));
     devices
 }
 

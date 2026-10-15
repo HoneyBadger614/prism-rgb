@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window may only use Prism's own commands and basic window features. No file, shell, or network access.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

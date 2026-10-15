@@ -19,16 +19,34 @@ control them yet):
 
 ## Try it
 
+You need Rust, Node.js, `hidapi` and `webkit2gtk-4.1`. On Arch:
+
+```sh
+sudo pacman -S rust nodejs npm hidapi webkit2gtk-4.1
+npm install
+npm run dev
+```
+
+To list connected Corsair devices in the terminal instead:
+
 ```sh
 cargo run --bin prism-probe
 ```
 
-This lists connected Corsair devices. It is read-only and never sends anything
-to a device.
+Both are read-only for now and never send anything to a device.
 
 ## Project layout
 
 - `crates/prism-core` - the device layer (finding and talking to devices)
+- `src-tauri` - the desktop app (window, and the bridge to `prism-core`)
+- `ui` - the screens (HTML, CSS, JavaScript)
+
+## Security
+
+- Prism never needs to run as root.
+- The app window has no file, shell, or network access. It can only call
+  Prism's own commands.
+- No fonts, scripts, or anything else load from the internet.
 
 ## License
 

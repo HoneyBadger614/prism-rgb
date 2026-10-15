@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prism</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PRISM</div>
+    <div class="profile">Profile: Default</div>
+    <button class="btn ghost" id="rescan">Rescan devices</button>
+  </header>
+
+  <div class="layout">
+    <nav class="side" aria-label="Devices">
+      <h3>Devices</h3>
+      <div id="device-list" class="device-list"></div>
+    </nav>
+
+    <main class="main" id="main">
+      <div class="empty" id="empty-state" hidden>
+        <h2>Looking for devices…</h2>
+        <p>Plug in a Corsair keyboard, mouse or lighting controller, then press <b>Rescan devices</b>.</p>
+      </div>
+
+      <div id="device-view" hidden>
+        <div class="main-head">
+          <div>
+            <h2 id="dev-title"></h2>
+            <p class="dev-sub" id="dev-sub"></p>
+          </div>
+          <div class="tabs" role="tablist">
+            <button class="tab" role="tab" id="tab-light" data-t="light" aria-selected="true">Lighting</button>
+            <button class="tab" role="tab" id="tab-keys" data-t="keys" aria-selected="false">Key bindings</button>
+            <button class="tab" role="tab" id="tab-mem" data-t="mem" aria-selected="false">Onboard memory</button>
+          </div>
+        </div>
+
+        <div class="visual" id="visual"></div>
+
+        <div class="soon" id="soon"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

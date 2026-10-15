@@ -190,6 +190,41 @@ async fn backup_onboard(app: tauri::AppHandle) -> Result<backup::Manifest, Strin
     .map_err(|e| e.to_string())?
 }
 
+fn backup_dir(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+    if !backup::valid_name(name) {
+        return Err("That isn't a backup name".into());
+    }
+    let dir = backup::root(&config_dir(app)?).join(name);
+    if !dir.join("manifest.json").exists() {
+        return Err("That backup doesn't exist".into());
+    }
+    Ok(dir)
+}
+
+/// What restoring a backup would change on the devices. Read-only.
+#[tauri::command]
+async fn restore_plan(app: tauri::AppHandle, name: String) -> Result<backup::Plan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = backup_dir(&app, &name)?;
+        app.state::<AppState>().engine.restore_plan(dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Restores a backup onto the devices (only files that differ), after
+/// making a fresh backup. CHANGES THE DEVICES: the screen asks first.
+#[tauri::command]
+async fn restore_backup(app: tauri::AppHandle, name: String) -> Result<backup::RestoreReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = backup_dir(&app, &name)?;
+        let config = config_dir(&app)?;
+        app.state::<AppState>().engine.restore(dir, &config)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Every onboard backup, newest first.
 #[tauri::command]
 fn list_backups(app: tauri::AppHandle) -> Vec<backup::Manifest> {
@@ -298,6 +333,8 @@ fn main() {
             macro_record_stop,
             backup_onboard,
             list_backups,
+            restore_plan,
+            restore_backup,
             open_backups,
             ui_log
         ])

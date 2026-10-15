@@ -280,6 +280,22 @@ impl K65Mini {
         result
     }
 
+    /// Deletes an onboard file (fine if it isn't there). CHANGES THE
+    /// KEYBOARD'S MEMORY.
+    pub fn delete_file(&self, id: u16) -> Result<()> {
+        let [lo, hi] = id.to_le_bytes();
+        let d = self.request(&[cmd::DELETE_FILE, lo, hi])?;
+        match d[2] {
+            0 | 0x01 => Ok(()),
+            s => Err(Error::Refused(cmd::DELETE_FILE, s)),
+        }
+    }
+
+    /// The fixed system files every K65 has.
+    pub fn is_system_file(id: u16) -> bool {
+        ROOT_FILES.contains(&id)
+    }
+
     /// Reads every onboard file Prism can find, starting from the fixed
     /// system files and following the file numbers they mention (profile
     /// files are numbered 0x6dXX). Returns (file number, contents) pairs.

@@ -367,6 +367,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 .onboard-text b { color: var(--text); }
 .onboard-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .backup-row .layer-meta { white-space: normal; }
+.restore-box { margin: -2px 0 6px 18px; padding: 12px 14px; border-left: 2px solid var(--accent); background: var(--surface); border-radius: 0 10px 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.restore-q { margin: 0; font-weight: 600; font-size: 14px; }
+.restore-lines { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
 
 /* key bindings */
 .bindings { display: flex; flex-direction: column; gap: 16px; }

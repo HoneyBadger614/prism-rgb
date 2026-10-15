@@ -5,6 +5,9 @@
 //!   prism-mouse zones        light each zone white in turn, to check them
 //!   prism-mouse zone 4 20    light only zone 4 (of 5) white, for 20 s
 //!   prism-mouse probe 5 8 4  try raw zone ids 5..=8, each white for 4 s
+//!   prism-mouse buttons Sniper 15
+//!                            for 15 s, the Sniper button reports to the
+//!                            computer; presses are shown, then it's put back
 //!   prism-mouse reset        just hand lighting back to the mouse
 //!
 //! When time is up the mouse goes back to its own lighting.
@@ -33,7 +36,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mouse = Nightsword::open(&api)?;
     println!("Nightsword RGB found and switched to Prism control.");
 
-    if what == "probe" {
+    if what == "buttons" {
+        let name = args.next().unwrap_or_else(|| "Sniper".into());
+        let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(15);
+        let channel = Nightsword::open_buttons(&api)?;
+        mouse.report_buttons(&[name.as_str()])?;
+        println!("{name} now reports to the computer for {seconds} s. Press it a few times.");
+        let end = Instant::now() + Duration::from_secs(seconds);
+        let mut last: Vec<&str> = Vec::new();
+        let mut buf = [0u8; 64];
+        while Instant::now() < end {
+            let n = channel.read_timeout(&mut buf, 100)?;
+            if n == 0 {
+                continue;
+            }
+            if let Some(held) = prism_core::nightsword::buttons_held(&buf[..n]) {
+                if held != last {
+                    println!("  held: {}", if held.is_empty() { "(none)".to_string() } else { held.join(", ") });
+                    last = held;
+                }
+            }
+        }
+        println!("Putting every button back to normal.");
+    } else if what == "probe" {
         let from: u8 = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
         let to: u8 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
         let hold: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(4);

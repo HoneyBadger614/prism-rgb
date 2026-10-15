@@ -3,6 +3,11 @@
 
 const { invoke } = window.__TAURI__.core;
 
+// Report screen errors to Prism's log so they can be fixed.
+const report = (m) => invoke("ui_log", { message: String(m) }).catch(() => {});
+window.addEventListener("error", (e) => report(`${e.message} at ${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => report(`unhandled: ${e.reason?.stack || e.reason}`));
+
 const ICONS = {
   keyboard: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>',
   mouse: '<svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/></svg>',
@@ -126,11 +131,17 @@ function render() {
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.t === tab)));
 
   const nodeLighting = ["lighting", "keyboard", "mouse"].includes(d.kind) && tab === "light";
+  const keyBindings = ["keyboard", "mouse"].includes(d.kind) && tab === "keys";
   $("node-lighting").hidden = !nodeLighting;
-  $("visual").hidden = nodeLighting;
-  $("soon").hidden = nodeLighting;
+  $("bindings-view").hidden = !keyBindings;
+  $("visual").hidden = nodeLighting || keyBindings;
+  $("soon").hidden = nodeLighting || keyBindings;
   if (nodeLighting) {
     Lighting.show({ lighting: "node", keyboard: "keyboard", mouse: "mouse" }[d.kind]);
+    return;
+  }
+  if (keyBindings) {
+    Bindings.show(d.kind);
     return;
   }
   $("soon").innerHTML = SOON[tab];
@@ -159,4 +170,4 @@ async function scan() {
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { tab = t.dataset.t; render(); }));
 $("rescan").addEventListener("click", scan);
-Lighting.init().then(scan);
+Lighting.init().then(() => { Bindings.init(); scan(); });

@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 prism-core = { path = "../crates/prism-core" }
+prism-input = { path = "../crates/prism-input" }
 hidapi = { version = "2.6", default-features = false, features = ["linux-shared-hidraw"] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }

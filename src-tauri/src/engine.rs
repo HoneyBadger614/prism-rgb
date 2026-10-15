@@ -89,7 +89,7 @@ impl Engine {
             let mut mouse: Link<Nightsword> = Link::new();
             let mut unsaved_since: Option<Instant> = None;
             let start = Instant::now();
-            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![] };
+            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![] };
 
             loop {
                 node.reconnect(&mut api, |api| {
@@ -202,7 +202,7 @@ pub fn load(path: &Option<PathBuf>, devices: &Devices) -> LightingStore {
     if let Ok(old) = serde_json::from_str::<Layer>(&text) {
         let layer = Layer { name: "Main".into(), ..old };
         let (keyboard, mouse) = (store.profiles[0].keyboard.clone(), store.profiles[0].mouse.clone());
-        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse });
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse, bindings: vec![] });
     }
     store.sanitized(&devices.fans, &devices.keyboard, &devices.mouse)
 }

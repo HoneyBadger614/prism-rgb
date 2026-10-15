@@ -58,6 +58,101 @@
 
         <div class="soon" id="soon"></div>
 
+        <div class="bindings" id="bindings-view" hidden>
+          <div class="bind-top">
+            <label class="switch">
+              <input type="checkbox" id="bindings-on">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+              <span class="switch-text">Bindings on</span>
+            </label>
+            <p class="hint" id="bind-status"></p>
+          </div>
+
+          <div class="lighting-grid">
+            <div class="left-col">
+              <section class="preview" aria-label="Choose a key or button">
+                <div class="preview-head">
+                  <span class="label" id="bind-pick-label">Pick a key</span>
+                  <button class="mini" id="bind-capture">Press a key to pick it</button>
+                </div>
+                <div class="bind-kb" id="bind-kb"></div>
+                <div class="bind-mouse" id="bind-mouse">
+                  <div class="mouse-group">
+                    <span class="label">Top</span>
+                    <div class="mouse-btns" id="bind-mouse-top"></div>
+                  </div>
+                  <div class="mouse-group">
+                    <span class="label">Side</span>
+                    <div class="mouse-btns" id="bind-mouse-side"></div>
+                  </div>
+                  <p class="hint">Buttons marked <b>Set up</b> send whatever your mouse's own saved settings say. Click one and press it once so Prism learns it.</p>
+                </div>
+                <p class="capture-msg" id="capture-msg" hidden></p>
+              </section>
+
+              <section class="layers" aria-label="Your bindings">
+                <div class="layers-head">
+                  <span class="label">Your bindings</span>
+                  <span class="hint" id="bind-count"></span>
+                </div>
+                <div class="layer-list" id="bind-list"></div>
+              </section>
+            </div>
+
+            <section class="controls" aria-label="Binding settings">
+              <div class="no-layer" id="bind-empty">
+                <p>Pick a key or button to change what it does.</p>
+              </div>
+
+              <div class="layer-editor" id="bind-editor" hidden>
+                <div class="editing-head">
+                  <span class="label">When you press</span>
+                  <span class="editing-name" id="bind-input-name"></span>
+                  <span class="editing-target" id="bind-summary"></span>
+                </div>
+
+                <div class="field">
+                  <span class="label">It should</span>
+                  <div class="seg seg-3" id="bind-kinds" role="group" aria-label="What it should do">
+                    <button data-kind="normal">Work normally</button>
+                    <button data-kind="key">Be another key</button>
+                    <button data-kind="combo">Be a combo</button>
+                    <button data-kind="media">Media</button>
+                    <button data-kind="launch">Open an app</button>
+                    <button data-kind="disabled">Do nothing</button>
+                  </div>
+                </div>
+
+                <div class="field" id="bind-key-panel" hidden>
+                  <span class="label">Act as</span>
+                  <button class="mini" id="bind-key-capture">Press the key on your keyboard</button>
+                  <select class="text-input" id="bind-key-select" aria-label="Key to act as"></select>
+                </div>
+
+                <div class="field" id="bind-combo-panel" hidden>
+                  <span class="label">Hold these</span>
+                  <div class="chips" id="bind-mods"></div>
+                  <span class="label">Plus this key</span>
+                  <select class="text-input" id="bind-combo-key" aria-label="Key in the combo"></select>
+                </div>
+
+                <div class="field" id="bind-media-panel" hidden>
+                  <span class="label">Media key</span>
+                  <div class="media-grid" id="bind-media"></div>
+                </div>
+
+                <div class="field" id="bind-app-panel" hidden>
+                  <span class="label">App</span>
+                  <input class="text-input" id="bind-app-search" placeholder="Search apps" spellcheck="false" autocomplete="off">
+                  <div class="app-list" id="bind-apps"></div>
+                </div>
+
+                <p class="hint" id="bind-disabled-note" hidden>This key or button won't do anything while bindings are on.</p>
+              </div>
+            </section>
+          </div>
+        </div>
+
         <div class="node-lighting" id="node-lighting" hidden>
           <div class="lighting-grid">
             <div class="left-col">
@@ -208,6 +303,7 @@
   </div>
 
   <script src="lighting.js"></script>
+  <script src="bindings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

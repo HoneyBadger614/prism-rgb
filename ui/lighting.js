@@ -130,9 +130,12 @@ const Lighting = (() => {
     });
   }
 
+  const listeners = [];
+
   function changed() {
     renderAll();
     send();
+    listeners.forEach((fn) => fn());
   }
 
   function editLayer(changes) {
@@ -1045,7 +1048,7 @@ const Lighting = (() => {
 
   async function init() {
     const state = await invoke("get_lighting");
-    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones };
+    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones, catalog: state.catalog, bindingsError: state.bindings_error, mouseButtons: state.mouse_buttons };
     layerIndex = Math.max(0, stack().length - 1);
 
     $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));
@@ -1098,5 +1101,13 @@ const Lighting = (() => {
     renderAll();
   }
 
-  return { init, show };
+  return {
+    init,
+    show,
+    // For the Key bindings screen, which shares profiles with lighting.
+    state: () => light,
+    profile: () => profile(),
+    save: () => { send(); renderProfiles(); },
+    onChange: (fn) => listeners.push(fn),
+  };
 })();

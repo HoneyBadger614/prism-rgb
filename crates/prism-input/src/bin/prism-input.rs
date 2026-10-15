@@ -21,6 +21,17 @@ fn main() {
     match args.next().as_deref() {
         Some("list") => list(),
         Some("watch") => watch(args.next().and_then(|s| s.parse().ok()).unwrap_or(20)),
+        Some("capture") => {
+            let product = match args.next().as_deref() {
+                Some("kb") => prism_core_pids::KEYBOARD,
+                _ => prism_core_pids::MOUSE,
+            };
+            println!("Press a button within 10 s...");
+            match prism_input::capture_press(product, Duration::from_secs(10)) {
+                Some(c) => println!("Got {} ({c})", prism_input::raw_name(c)),
+                None => println!("Nothing pressed."),
+            }
+        }
         Some("remap") => {
             let rest: Vec<String> = args.collect();
             if let Err(e) = remap(&rest) {

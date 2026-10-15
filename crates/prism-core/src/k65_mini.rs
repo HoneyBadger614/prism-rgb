@@ -170,9 +170,10 @@ impl K65Mini {
     }
 }
 
-/// One key on the screen: its label, the LED slots it lights, and where it
-/// sits (row 0 is the number row; `x` and `w` are in quarter-key units, 60
-/// across).
+/// One key on the screen: its label, the LED slots it lights, where it sits
+/// (row 0 is the number row; `x` and `w` are in quarter-key units, 60
+/// across), and the Linux key code it types (0 for Fn, which the keyboard
+/// handles itself).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Key {
     pub label: &'static str,
@@ -180,37 +181,39 @@ pub struct Key {
     pub row: u8,
     pub x: u8,
     pub w: u8,
+    pub code: u16,
 }
 
-/// The K65 RGB Mini, US layout. Widths in quarter-keys: a normal key is 4.
-/// The space bar is split into its three LEDs.
-const ROWS: [&[(&str, &[u8], u8)]; 5] = [
+/// The K65 RGB Mini, US layout: (label, LED slots, width in quarter-keys,
+/// Linux key code). A normal key is 4 wide. The space bar is split into its
+/// three LEDs, which all type Space.
+const ROWS: [&[(&str, &[u8], u8, u16)]; 5] = [
     &[
-        ("Esc", &[41], 4), ("1", &[30], 4), ("2", &[31], 4), ("3", &[32], 4), ("4", &[33], 4),
-        ("5", &[34], 4), ("6", &[35], 4), ("7", &[36], 4), ("8", &[37], 4), ("9", &[38], 4),
-        ("0", &[39], 4), ("-", &[45], 4), ("=", &[46], 4), ("Backspace", &[42], 8),
+        ("Esc", &[41], 4, 1), ("1", &[30], 4, 2), ("2", &[31], 4, 3), ("3", &[32], 4, 4), ("4", &[33], 4, 5),
+        ("5", &[34], 4, 6), ("6", &[35], 4, 7), ("7", &[36], 4, 8), ("8", &[37], 4, 9), ("9", &[38], 4, 10),
+        ("0", &[39], 4, 11), ("-", &[45], 4, 12), ("=", &[46], 4, 13), ("Backspace", &[42], 8, 14),
     ],
     &[
-        ("Tab", &[43], 6), ("Q", &[20], 4), ("W", &[26], 4), ("E", &[8], 4), ("R", &[21], 4),
-        ("T", &[23], 4), ("Y", &[28], 4), ("U", &[24], 4), ("I", &[12], 4), ("O", &[18], 4),
-        ("P", &[19], 4), ("[", &[47], 4), ("]", &[48], 4),
+        ("Tab", &[43], 6, 15), ("Q", &[20], 4, 16), ("W", &[26], 4, 17), ("E", &[8], 4, 18), ("R", &[21], 4, 19),
+        ("T", &[23], 4, 20), ("Y", &[28], 4, 21), ("U", &[24], 4, 22), ("I", &[12], 4, 23), ("O", &[18], 4, 24),
+        ("P", &[19], 4, 25), ("[", &[47], 4, 26), ("]", &[48], 4, 27),
         // US backslash; 50 is the same key's slot on UK boards, lit too to be safe
-        ("\\", &[49, 50], 6),
+        ("\\", &[49, 50], 6, 43),
     ],
     &[
-        ("Caps", &[57], 7), ("A", &[4], 4), ("S", &[22], 4), ("D", &[7], 4), ("F", &[9], 4),
-        ("G", &[10], 4), ("H", &[11], 4), ("J", &[13], 4), ("K", &[14], 4), ("L", &[15], 4),
-        (";", &[51], 4), ("'", &[52], 4), ("Enter", &[40], 9),
+        ("Caps", &[57], 7, 58), ("A", &[4], 4, 30), ("S", &[22], 4, 31), ("D", &[7], 4, 32), ("F", &[9], 4, 33),
+        ("G", &[10], 4, 34), ("H", &[11], 4, 35), ("J", &[13], 4, 36), ("K", &[14], 4, 37), ("L", &[15], 4, 38),
+        (";", &[51], 4, 39), ("'", &[52], 4, 40), ("Enter", &[40], 9, 28),
     ],
     &[
-        ("Shift", &[106], 9), ("Z", &[29], 4), ("X", &[27], 4), ("C", &[6], 4), ("V", &[25], 4),
-        ("B", &[5], 4), ("N", &[17], 4), ("M", &[16], 4), (",", &[54], 4), (".", &[55], 4),
-        ("/", &[56], 4), ("Shift", &[110], 11),
+        ("Shift", &[106], 9, 42), ("Z", &[29], 4, 44), ("X", &[27], 4, 45), ("C", &[6], 4, 46), ("V", &[25], 4, 47),
+        ("B", &[5], 4, 48), ("N", &[17], 4, 49), ("M", &[16], 4, 50), (",", &[54], 4, 51), (".", &[55], 4, 52),
+        ("/", &[56], 4, 53), ("Shift", &[110], 11, 54),
     ],
     &[
-        ("Ctrl", &[105], 5), ("Win", &[108], 5), ("Alt", &[107], 5),
-        ("", &[0], 8), ("Space", &[44], 9), ("", &[1], 8),
-        ("Alt", &[111], 5), ("Fn", &[122], 5), ("Menu", &[101], 5), ("Ctrl", &[109], 5),
+        ("Ctrl", &[105], 5, 29), ("Win", &[108], 5, 125), ("Alt", &[107], 5, 56),
+        ("", &[0], 8, 57), ("Space", &[44], 9, 57), ("", &[1], 8, 57),
+        ("Alt", &[111], 5, 100), ("Fn", &[122], 5, 0), ("Menu", &[101], 5, 127), ("Ctrl", &[109], 5, 97),
     ],
 ];
 
@@ -220,8 +223,8 @@ pub fn keys() -> Vec<Key> {
     let mut out = Vec::new();
     for (row, keys) in ROWS.iter().enumerate() {
         let mut x = 0;
-        for &(label, slots, w) in keys.iter() {
-            out.push(Key { label, slots, row: row as u8, x, w });
+        for &(label, slots, w, code) in keys.iter() {
+            out.push(Key { label, slots, row: row as u8, x, w, code });
             x += w;
         }
     }

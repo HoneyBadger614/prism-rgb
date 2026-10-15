@@ -2372,6 +2372,7 @@ version = "0.1.0"
 dependencies = [
  "hidapi",
  "prism-core",
+ "prism-input",
  "serde",
  "serde_json",
  "tauri",

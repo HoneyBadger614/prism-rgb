@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use hidapi::HidApi;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub mod bindings;
 pub mod effects;
 pub mod k65_mini;
 pub mod lighting_node;

@@ -1,8 +1,14 @@
 // Prism desktop app: the window and the bridge between the screen and prism-core.
 
+mod apps;
 mod engine;
+mod remap;
+
+use std::time::Duration;
 
 use engine::{Devices, Engine};
+use prism_core::bindings::{self, InputDevice};
+use remap::Remap;
 use hidapi::HidApi;
 use prism_core::effects::{ChannelLayout, LightingStore, Surface};
 use prism_core::k65_mini::{self, Key};
@@ -61,6 +67,7 @@ struct AppState {
     keyboard: Surface,
     keys: Vec<Key>,
     mouse: Surface,
+    remap: Remap,
 }
 
 #[derive(Serialize)]
@@ -72,6 +79,12 @@ struct LightingState {
     keys: Vec<Key>,
     /// The Nightsword's lighting zones, in LED order.
     mouse_zones: Vec<&'static str>,
+    /// The mouse's buttons and the code each sends out of the box (0 = learn it).
+    mouse_buttons: &'static [(&'static str, u16)],
+    /// Keys offered for bindings: (group, [(code, name)]).
+    catalog: &'static [(&'static str, &'static [(u16, &'static str)])],
+    /// Why bindings aren't working, if they aren't.
+    bindings_error: Option<String>,
 }
 
 #[tauri::command]
@@ -81,6 +94,9 @@ fn get_lighting(state: State<AppState>) -> LightingState {
         layout: state.layout.clone(),
         keys: state.keys.clone(),
         mouse_zones: nightsword::ZONES.iter().map(|z| z.0).collect(),
+        catalog: bindings::CATALOG,
+        mouse_buttons: &nightsword::BUTTONS,
+        bindings_error: state.remap.error(),
     }
 }
 
@@ -90,7 +106,59 @@ fn get_lighting(state: State<AppState>) -> LightingState {
 fn set_lighting(state: State<AppState>, store: LightingStore) -> LightingStore {
     let store = store.sanitized(&state.fans, &state.keyboard, &state.mouse);
     state.engine.set_config(store.clone());
+    state.remap.apply(&store);
     store
+}
+
+#[derive(Serialize)]
+struct Pressed {
+    code: u16,
+    name: String,
+}
+
+/// A name for any key code: Prism's friendly one if it has it.
+fn key_name(code: u16) -> String {
+    bindings::friendly_name(code).map(str::to_string).unwrap_or_else(|| prism_input::raw_name(code))
+}
+
+/// Waits (up to 8 s) for the next key or button press on the keyboard or
+/// mouse and says which it was.
+#[tauri::command]
+async fn capture_input(app: tauri::AppHandle, device: InputDevice) -> Option<Pressed> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let store = state.engine.config();
+        state.remap.capture(&store, device, Duration::from_secs(8)).map(|code| Pressed { code, name: key_name(code) })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Names for key codes, for bindings the catalog doesn't cover.
+#[tauri::command]
+fn key_names(codes: Vec<u16>) -> Vec<(u16, String)> {
+    codes.into_iter().take(500).map(|c| (c, key_name(c))).collect()
+}
+
+/// Installed apps, for "open an app" bindings.
+#[tauri::command]
+fn list_apps() -> Vec<apps::App> {
+    apps::list()
+}
+
+/// Writes a screen-side error to Prism's own log (stderr), for debugging.
+/// Nothing leaves the computer.
+#[tauri::command]
+fn ui_log(message: String) {
+    let m: String = message.chars().filter(|c| !c.is_control()).take(500).collect();
+    eprintln!("[screen] {m}");
+}
+
+/// Whether bindings are working, and why not if they aren't.
+#[tauri::command]
+fn bindings_status(state: State<AppState>) -> Option<String> {
+    state.remap.error()
 }
 
 fn main() {
@@ -115,17 +183,30 @@ fn main() {
             };
             let (fans, keyboard, mouse) = (devices.fans.clone(), devices.keyboard.clone(), devices.mouse.clone());
             let config = engine::load(&save_to, &devices);
+            let remap = Remap::default();
+            remap.apply(&config);
             let engine = Engine::spawn(app.handle().clone(), config, devices, save_to);
-            app.manage(AppState { engine, layout, fans, keyboard, keys, mouse });
+            app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, remap });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_devices, get_lighting, set_lighting])
+        .invoke_handler(tauri::generate_handler![
+            list_devices,
+            get_lighting,
+            set_lighting,
+            capture_input,
+            key_names,
+            list_apps,
+            bindings_status,
+            ui_log
+        ])
         .build(tauri::generate_context!())
         .expect("Prism failed to start");
 
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
-            handle.state::<AppState>().engine.stop();
+            let state = handle.state::<AppState>();
+            state.remap.stop();
+            state.engine.stop();
         }
     });
 }

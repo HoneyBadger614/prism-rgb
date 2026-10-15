@@ -72,6 +72,8 @@ pub enum Action {
     /// Holds several keys together, e.g. Ctrl+Shift+S. Pressed in order and
     /// released in reverse.
     Combo(Vec<u16>),
+    /// Opens an installed app by its desktop id, using `gtk-launch`.
+    Launch(String),
     /// Does nothing.
     Disabled,
 }
@@ -81,8 +83,29 @@ impl Action {
         match self {
             Action::Key(k) => vec![*k],
             Action::Combo(ks) => ks.clone(),
-            Action::Disabled => vec![],
+            Action::Launch(_) | Action::Disabled => vec![],
         }
+    }
+}
+
+/// Opens an app by desktop id without going through a shell. The id must be
+/// plain (letters, digits, `.`, `_`, `-`), so it can't be used to run
+/// anything else.
+fn launch(app: &str) {
+    if app.is_empty() || !app.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return;
+    }
+    let child = std::process::Command::new("gtk-launch")
+        .arg(app)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut c) = child {
+        // Collect the launcher when it finishes so it doesn't linger.
+        std::thread::spawn(move || {
+            let _ = c.wait();
+        });
     }
 }
 
@@ -106,7 +129,7 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
     match bindings.get(&code) {
         None => vec![(code, value)],
         Some(Action::Key(k)) => vec![(*k, value)],
-        Some(Action::Disabled) => vec![],
+        Some(Action::Disabled) | Some(Action::Launch(_)) => vec![],
         Some(Action::Combo(keys)) => match value {
             PRESSED => keys.iter().map(|&k| (k, PRESSED)).collect(),
             RELEASED => keys.iter().rev().map(|&k| (k, RELEASED)).collect(),
@@ -209,6 +232,9 @@ fn pump(mut dev: Device, bindings: HashMap<u16, Action>, out: Arc<Mutex<VirtualD
         for ev in events {
             match ev.event_type() {
                 EventType::KEY => {
+                    if let (Some(Action::Launch(app)), PRESSED) = (bindings.get(&ev.code()), ev.value()) {
+                        launch(app);
+                    }
                     for (code, value) in translate(ev.code(), ev.value(), &bindings) {
                         batch.push(InputEvent::new(EventType::KEY, code, value));
                     }
@@ -242,6 +268,40 @@ fn readable(fd: i32, timeout_ms: i32) -> bool {
     let mut p = PollFd { fd, events: POLLIN, revents: 0 };
     // Safety: one valid pollfd, and the count says one.
     unsafe { poll(&mut p, 1, timeout_ms) > 0 && p.revents & POLLIN != 0 }
+}
+
+/// Waits up to `timeout` for the next key or button press on a Corsair
+/// device with USB product id `product`, and returns its code. Nothing is
+/// taken over while waiting.
+pub fn capture_press(product: u16, timeout: std::time::Duration) -> Option<u16> {
+    let mut devs: Vec<Device> =
+        corsair_devices().into_iter().filter(|d| d.product == product && d.has_keys()).map(|d| d.device).collect();
+    let end = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < end {
+        for d in &mut devs {
+            if !readable(d.as_raw_fd(), 20) {
+                continue;
+            }
+            let Ok(events) = d.fetch_events() else { continue };
+            for ev in events {
+                if ev.event_type() == EventType::KEY && ev.value() == PRESSED {
+                    return Some(ev.code());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A readable name for any key code, e.g. "KEY_KPSLASH" becomes "Kpslash".
+pub fn raw_name(code: u16) -> String {
+    let n = format!("{:?}", Key::new(code));
+    let n = n.trim_start_matches("KEY_").trim_start_matches("BTN_");
+    let mut out = n.to_ascii_lowercase();
+    if let Some(f) = out.get_mut(0..1) {
+        f.make_ascii_uppercase();
+    }
+    out
 }
 
 /// Looks up a key or button by its Linux name, e.g. "KEY_A" or "BTN_SIDE".
@@ -297,6 +357,19 @@ mod tests {
         let m = map(&[(A, Action::Disabled)]);
         assert!(translate(A, PRESSED, &m).is_empty());
         assert!(translate(A, RELEASED, &m).is_empty());
+    }
+
+    #[test]
+    fn launch_sends_no_key_events() {
+        let m = map(&[(A, Action::Launch("firefox".into()))]);
+        assert!(translate(A, PRESSED, &m).is_empty());
+        assert!(translate(A, RELEASED, &m).is_empty());
+    }
+
+    #[test]
+    fn raw_names() {
+        assert_eq!(raw_name(98), "Kpslash");
+        assert_eq!(raw_name(0x113), "Side");
     }
 
     #[test]

@@ -153,10 +153,16 @@ function render() {
 
   const nodeLighting = ["lighting", "keyboard", "mouse"].includes(d.kind) && tab === "light";
   const keyBindings = ["keyboard", "mouse"].includes(d.kind) && tab === "keys";
+  const onboard = ["keyboard", "mouse"].includes(d.kind) && tab === "mem";
   $("node-lighting").hidden = !nodeLighting;
   $("bindings-view").hidden = !keyBindings;
-  $("visual").hidden = nodeLighting || keyBindings;
-  $("soon").hidden = nodeLighting || keyBindings;
+  $("onboard-view").hidden = !onboard;
+  $("visual").hidden = nodeLighting || keyBindings || onboard;
+  $("soon").hidden = nodeLighting || keyBindings || onboard;
+  if (onboard) {
+    Onboard.show();
+    return;
+  }
   if (nodeLighting) {
     Lighting.show({ lighting: "node", keyboard: "keyboard", mouse: "mouse" }[d.kind]);
     return;
@@ -191,4 +197,4 @@ async function scan() {
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { tab = t.dataset.t; render(); }));
 $("rescan").addEventListener("click", scan);
-Lighting.init().then(() => { Bindings.init(); scan(); });
+Lighting.init().then(() => { Bindings.init(); Onboard.init(); scan(); });

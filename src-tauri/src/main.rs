@@ -2,6 +2,7 @@
 
 mod apps;
 mod autostart;
+mod backup;
 mod engine;
 mod mouse_buttons;
 mod remap;
@@ -173,6 +174,36 @@ async fn macro_record_stop(app: tauri::AppHandle) -> Vec<bindings::MacroStep> {
     .unwrap_or_default()
 }
 
+fn config_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_config_dir().map_err(|e| e.to_string())
+}
+
+/// Copies everything stored on the keyboard and mouse into a new backup
+/// folder. Read-only: nothing on the devices changes.
+#[tauri::command]
+async fn backup_onboard(app: tauri::AppHandle) -> Result<backup::Manifest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = config_dir(&app)?;
+        app.state::<AppState>().engine.backup(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every onboard backup, newest first.
+#[tauri::command]
+fn list_backups(app: tauri::AppHandle) -> Vec<backup::Manifest> {
+    config_dir(&app).map(|d| backup::list(&d)).unwrap_or_default()
+}
+
+/// Opens the backups folder in the file manager.
+#[tauri::command]
+fn open_backups(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = backup::root(&config_dir(&app)?);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Writes a screen-side error to Prism's own log (stderr), for debugging.
 /// Nothing leaves the computer.
 #[tauri::command]
@@ -265,6 +296,9 @@ fn main() {
             bindings_status,
             macro_record_start,
             macro_record_stop,
+            backup_onboard,
+            list_backups,
+            open_backups,
             ui_log
         ])
         .build(tauri::generate_context!())

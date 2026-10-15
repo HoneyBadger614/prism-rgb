@@ -55,6 +55,29 @@ fn dpi_slot_report(slot: u8, dpi: u16) -> [u8; REPORT_LEN] {
     report(&[cmd::DPI, slot, 0x00, 0x00, d[0], d[1], d[0], d[1], 0, 0, 0])
 }
 
+/// Reads ask the mouse for something; it answers on interface 0 with the
+/// same first bytes.
+const READ: u8 = 0x0e;
+/// Onboard files (field 0x17, a small file system with 8.3 names).
+mod files {
+    pub const FIELD: u8 = 0x17;
+    pub const ENTER: u8 = 0x0c; // pick a profile folder (no number = the first)
+    pub const OPEN_READ: u8 = 0x07;
+    pub const PREPARE_READ: u8 = 0x0a;
+    pub const CLOSE: u8 = 0x08;
+    pub const SIZE: u8 = 0x03;
+    pub const WAIT: u8 = 0x0d;
+    pub const PROFILES: u8 = 0x04;
+    pub const BULK_READ: u8 = 0xff;
+    /// Data bytes in one bulk packet, and packets per stream.
+    pub const PACKET: usize = 60;
+    pub const PACKETS: usize = 5;
+}
+/// Largest onboard file Prism will read.
+const MAX_FILE: usize = 64 * 1024;
+/// Names in each profile folder (lighting files are numbered after these).
+const FOLDER_FILES: [&str; 5] = ["PROFILE.DAT", "PROFILE.I", "PROFILE.MAP", "lghtcnt.cnt", "M000"];
+
 /// The message switching to a DPI stage (1-3), or sniper (0).
 fn dpi_select_report(stage: u8) -> [u8; REPORT_LEN] {
     report(&[cmd::DPI, DPI_SELECT[0], DPI_SELECT[1], stage.min(3)])
@@ -266,6 +289,109 @@ impl Nightsword {
         self.dev.write(&dpi_select_report(stage))?;
         std::thread::sleep(GAP);
         Ok(())
+    }
+
+    /// Sends a message on the control interface and waits for the answer that
+    /// starts with `expect`, on the answer channel `answers`.
+    fn ask(&self, answers: &HidDevice, msg: &[u8], expect: &[u8]) -> Result<[u8; 64]> {
+        // throw away anything already waiting
+        let mut junk = [0u8; 64];
+        while answers.read_timeout(&mut junk, 0).unwrap_or(0) > 0 {}
+        let mut q = [0u8; REPORT_LEN];
+        q[1..1 + msg.len()].copy_from_slice(msg);
+        self.dev.write(&q)?;
+        let end = std::time::Instant::now() + Duration::from_millis(600);
+        let mut a = [0u8; 64];
+        while std::time::Instant::now() < end {
+            let n = answers.read_timeout(&mut a, 50)?;
+            if n >= expect.len() && a[..expect.len()] == *expect {
+                return Ok(a);
+            }
+        }
+        Err(Error::NotFound)
+    }
+
+    fn tell(&self, msg: &[u8]) -> Result<()> {
+        let mut q = [0u8; REPORT_LEN];
+        q[1..1 + msg.len()].copy_from_slice(msg);
+        self.dev.write(&q)?;
+        std::thread::sleep(Duration::from_millis(12));
+        Ok(())
+    }
+
+    /// Reads one onboard file by name from the current folder. Read-only.
+    /// Always closes the file again, even if reading fails.
+    fn read_named(&self, answers: &HidDevice, name: &str) -> Result<Vec<u8>> {
+        let r = self.read_named_inner(answers, name);
+        if r.is_err() {
+            let _ = self.tell(&[WRITE, files::FIELD, files::CLOSE]);
+        }
+        r
+    }
+
+    fn read_named_inner(&self, answers: &HidDevice, name: &str) -> Result<Vec<u8>> {
+        use files::*;
+        let mut open = vec![WRITE, FIELD, OPEN_READ, 0x00];
+        open.extend_from_slice(name.as_bytes());
+        self.tell(&open)?;
+        self.ask(answers, &[READ, FIELD, WAIT], &[READ, FIELD, WAIT])?;
+        let size = self.ask(answers, &[READ, FIELD, SIZE, 0x01], &[READ, FIELD, SIZE, 0x01])?;
+        let len = u16::from_le_bytes([size[4], size[5]]) as usize;
+        if len > MAX_FILE {
+            let _ = self.tell(&[WRITE, FIELD, CLOSE]);
+            return Err(Error::NotFound);
+        }
+        let mut data = Vec::with_capacity(len);
+        while data.len() < len {
+            self.tell(&[WRITE, FIELD, PREPARE_READ])?;
+            self.ask(answers, &[READ, FIELD, WAIT], &[READ, FIELD, WAIT])?;
+            for n in 1..=PACKETS as u8 {
+                if data.len() >= len {
+                    break;
+                }
+                let take = (len - data.len()).min(PACKET) as u8;
+                let a = self.ask(answers, &[BULK_READ, n, take], &[READ, BULK_READ, n, take])?;
+                data.extend_from_slice(&a[4..4 + take as usize]);
+            }
+        }
+        self.tell(&[WRITE, FIELD, CLOSE])?;
+        Ok(data)
+    }
+
+    /// Reads every onboard file Prism knows the name of, from every profile
+    /// folder, plus the list of profiles. Read-only: nothing on the mouse
+    /// changes. Returns (folder, name, contents) for each file found.
+    pub fn read_all_files(&self, api: &HidApi) -> Result<Vec<(u8, String, Vec<u8>)>> {
+        use files::*;
+        let answers = Self::open_buttons(api)?;
+        let mut out = Vec::new();
+        let list = self.ask(&answers, &[READ, FIELD, PROFILES], &[READ, FIELD, PROFILES])?;
+        out.push((0, "profiles.list".to_string(), list[4..].to_vec()));
+        for folder in 0..4u8 {
+            let enter: Vec<u8> = if folder == 0 { vec![WRITE, FIELD, ENTER] } else { vec![WRITE, FIELD, ENTER, folder] };
+            self.tell(&enter)?;
+            let mut names: Vec<String> = FOLDER_FILES.iter().map(|s| s.to_string()).collect();
+            // lighting files: lght_00.d / .k, lght_01.d / .k, ... as many as there are
+            for i in 0..8 {
+                names.push(format!("lght_{i:02}.d"));
+                names.push(format!("lght_{i:02}.k"));
+            }
+            let mut any = false;
+            for name in names {
+                match self.read_named(&answers, &name) {
+                    Ok(data) if !data.is_empty() => {
+                        any = true;
+                        out.push((folder, name, data));
+                    }
+                    _ => {}
+                }
+            }
+            if !any {
+                break; // no such profile folder
+            }
+        }
+        let _ = self.tell(&[WRITE, FIELD, ENTER]);
+        Ok(out)
     }
 
     /// Opens the mouse's button channel, for reading button reports.

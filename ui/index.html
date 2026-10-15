@@ -75,6 +75,23 @@
 
         <div class="soon" id="soon"></div>
 
+        <div class="onboard" id="onboard-view" hidden>
+          <section class="layers onboard-card">
+            <div class="layers-head"><span class="label">Onboard memory</span></div>
+            <p class="onboard-text">Your keyboard and mouse can store settings inside themselves, so they work on any computer, even without Prism. A <b>backup</b> copies everything stored on <b>both</b> devices to this computer. It only reads: nothing on the devices changes.</p>
+            <div class="onboard-actions">
+              <button class="btn" id="backup-now">Back up now</button>
+              <button class="mini" id="backup-open">Open backups folder</button>
+              <span class="hint" id="backup-status" role="status"></span>
+            </div>
+            <p class="hint">Saving Prism's settings onto the devices is coming next. Prism will always make a backup first and ask before writing anything.</p>
+          </section>
+          <section class="layers">
+            <div class="layers-head"><span class="label">Your backups</span></div>
+            <div class="layer-list" id="backup-list"></div>
+          </section>
+        </div>
+
         <div class="bindings" id="bindings-view" hidden>
           <div class="bind-top">
             <label class="switch">
@@ -404,6 +421,7 @@
 
   <script src="lighting.js"></script>
   <script src="bindings.js"></script>
+  <script src="onboard.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

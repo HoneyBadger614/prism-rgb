@@ -4,6 +4,7 @@
 //!   prism-kb ff2d95 30     ...for 30 s
 //!   prism-kb slots         light slots one at a time and print each number,
 //!                          to check which slot is which key
+//!   prism-kb backup DIR    copy every onboard file into DIR (read-only)
 //!
 //! When time is up the keyboard goes back to its own lighting. Typing keeps
 //! working the whole time.
@@ -29,6 +30,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let api = HidApi::new()?;
+    if what == "backup" {
+        let dir = std::path::PathBuf::from(args.next().ok_or("give a folder to save into")?);
+        std::fs::create_dir_all(&dir)?;
+        // Opened without taking over the lighting: reading only.
+        let kb = K65Mini::open_with(&api, false)?;
+        for (id, r) in kb.read_all_files() {
+            match r {
+                Ok(data) => {
+                    std::fs::write(dir.join(format!("{id:04x}.bin")), &data)?;
+                    println!("  file {id:#06x}: {} bytes", data.len());
+                }
+                Err(e) => println!("  file {id:#06x}: {e}"),
+            }
+        }
+        return Ok(());
+    }
     let kb = K65Mini::open(&api)?;
     println!("K65 RGB Mini found and switched to Prism control.");
 

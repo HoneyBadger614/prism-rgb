@@ -361,6 +361,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 .node-lighting.keyboard #fans, .bind-kb { max-width: var(--kb-max); }
 .node-lighting.mouse #fans { height: 340px; }
 
+/* onboard memory */
+.onboard { display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
+.onboard-text { margin: 0; font-size: 14px; color: var(--muted); max-width: 70ch; }
+.onboard-text b { color: var(--text); }
+.onboard-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.backup-row .layer-meta { white-space: normal; }
+
 /* key bindings */
 .bindings { display: flex; flex-direction: column; gap: 16px; }
 .bind-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }

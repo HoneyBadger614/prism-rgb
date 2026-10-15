@@ -34,6 +34,8 @@ enum Msg {
     Dpi(DpiOp, bool),
     /// Save settings now; reply when done.
     Flush(Sender<()>),
+    /// Back up both devices' onboard memory into this folder; reply with what was saved.
+    Backup(PathBuf, String, Sender<crate::backup::Manifest>),
     Stop,
 }
 
@@ -242,6 +244,47 @@ impl Engine {
                         cfg = c;
                         unsaved_since = Some(Instant::now());
                     }
+                    Ok(Msg::Backup(dir, name, done)) => {
+                        use crate::backup::{save_files, write_manifest, DeviceBackup, Manifest};
+                        let mut keyboard = DeviceBackup::default();
+                        if let Some(k) = &kb.dev {
+                            keyboard.read = true;
+                            let mut ok = Vec::new();
+                            for (id, r) in k.read_all_files() {
+                                match r {
+                                    Ok(data) => ok.push((format!("{id:04x}.bin"), data)),
+                                    Err(e) => keyboard.error = Some(format!("file {id:#06x}: {e}")),
+                                }
+                            }
+                            match save_files(&dir, "k65", &ok) {
+                                Ok(files) => keyboard.files = files,
+                                Err(e) => keyboard.error = Some(e.to_string()),
+                            }
+                        }
+                        let mut mouse_b = DeviceBackup::default();
+                        if let (Some(m), Some(api)) = (&mouse.dev, api.as_ref()) {
+                            mouse_b.read = true;
+                            match m.read_all_files(api) {
+                                Ok(files) => {
+                                    let named: Vec<(String, Vec<u8>)> =
+                                        files.into_iter().map(|(f, n, d)| (format!("{f}_{n}"), d)).collect();
+                                    match save_files(&dir, "nightsword", &named) {
+                                        Ok(saved) => mouse_b.files = saved,
+                                        Err(e) => mouse_b.error = Some(e.to_string()),
+                                    }
+                                }
+                                Err(e) => mouse_b.error = Some(e.to_string()),
+                            }
+                        }
+                        // "2026-10-15_23-40-00" -> "2026-10-15 23:40:00"
+                        let created = match name.split_once('_') {
+                            Some((date, time)) => format!("{date} {}", time.replace('-', ":")),
+                            None => name.clone(),
+                        };
+                        let m = Manifest { name, created, keyboard, mouse: mouse_b };
+                        let _ = write_manifest(&dir, &m);
+                        let _ = done.send(m);
+                    }
                     Ok(Msg::Flush(done)) => {
                         save(&save_to, &cfg);
                         unsaved_since = None;
@@ -308,6 +351,14 @@ impl Engine {
     /// handling them. Everything else stays with the mouse.
     pub fn set_mouse_reporting(&self, names: Vec<&'static str>) {
         let _ = self.tx.send(Msg::MouseReporting(names));
+    }
+
+    /// Backs up both devices' onboard memory (read-only) into a new folder.
+    pub fn backup(&self, config_dir: &std::path::Path) -> Result<crate::backup::Manifest, String> {
+        let (name, dir) = crate::backup::new_folder(config_dir).map_err(|e| e.to_string())?;
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Msg::Backup(dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(90)).map_err(|_| "The backup took too long".to_string())
     }
 
     /// Seconds since effects started.

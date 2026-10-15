@@ -10,6 +10,7 @@
 //!                            computer; presses are shown, then it's put back
 //!   prism-mouse dpi 400 1600 3200 800
 //!                            set stages 1-3 and sniper, then try each for 8 s
+//!   prism-mouse backup DIR   copy every onboard file into DIR (read-only)
 //!   prism-mouse reset        just hand lighting back to the mouse
 //!
 //! When time is up the mouse goes back to its own lighting.
@@ -35,6 +36,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let api = HidApi::new()?;
+    if what == "backup" {
+        let dir = std::path::PathBuf::from(args.next().ok_or("give a folder to save into")?);
+        std::fs::create_dir_all(&dir)?;
+        // Opened without switching modes: reading only.
+        let mouse = Nightsword::open_with(&api, false)?;
+        for (folder, name, data) in mouse.read_all_files(&api)? {
+            std::fs::write(dir.join(format!("{folder}_{name}")), &data)?;
+            println!("  folder {folder} {name}: {} bytes", data.len());
+        }
+        return Ok(());
+    }
     let mouse = Nightsword::open(&api)?;
     println!("Nightsword RGB found and switched to Prism control.");
 

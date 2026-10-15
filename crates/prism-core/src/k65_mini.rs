@@ -39,8 +39,21 @@ mod cmd {
     pub const GET: u8 = 0x02;
     pub const CLOSE: u8 = 0x05;
     pub const WRITE: u8 = 0x06;
+    pub const READ: u8 = 0x08;
+    pub const PROBE: u8 = 0x09;
     pub const OPEN: u8 = 0x0d;
 }
+
+/// Handle used for reading onboard files (lighting uses [`HANDLE`]).
+const FILE_HANDLE: u8 = 0x02;
+/// Data bytes in one read reply (1024 minus the 3-byte header).
+const READ_CHUNK: usize = 1021;
+/// Largest onboard file Prism will read.
+const MAX_FILE: usize = 256 * 1024;
+/// Files that are always there, to start a backup from.
+const ROOT_FILES: [u16; 3] = [0x0025, 0x000f, 0x0002];
+/// Most files one backup will read.
+const MAX_FILES: usize = 128;
 
 mod property {
     pub const MODE: u8 = 0x03;
@@ -64,6 +77,10 @@ pub enum Error {
     NotFound,
     Usb(hidapi::HidError),
     BadSlot(u8),
+    /// The keyboard refused a request (command, status code).
+    Refused(u8, u8),
+    NoReply(u8),
+    TooBig(usize),
 }
 
 impl std::fmt::Display for Error {
@@ -72,6 +89,9 @@ impl std::fmt::Display for Error {
             Error::NotFound => write!(f, "K65 RGB Mini is not connected"),
             Error::Usb(e) => write!(f, "USB error: {e}"),
             Error::BadSlot(s) => write!(f, "LED slot {s} does not exist (0-{})", SLOTS - 1),
+            Error::Refused(c, s) => write!(f, "the keyboard refused command 0x{c:02x} (status 0x{s:02x})"),
+            Error::NoReply(c) => write!(f, "the keyboard didn't answer command 0x{c:02x}"),
+            Error::TooBig(n) => write!(f, "an onboard file says it's {n} bytes, which is too big to be real"),
         }
     }
 }
@@ -154,6 +174,86 @@ impl K65Mini {
         Ok((n >= 3).then_some(reply[2]))
     }
 
+    /// Sends one request and waits for the keyboard's answer to it, skipping
+    /// answers to other requests (lighting updates may be in flight).
+    fn request(&self, body: &[u8]) -> Result<[u8; 1024]> {
+        self.dev.write(&report(body))?;
+        let end = std::time::Instant::now() + Duration::from_millis(500);
+        let mut reply = [0u8; 1024];
+        while std::time::Instant::now() < end {
+            let n = self.dev.read_timeout(&mut reply, 100)?;
+            if n >= 3 && reply[1] == body[0] {
+                return Ok(reply);
+            }
+        }
+        Err(Error::NoReply(body[0]))
+    }
+
+    /// Reads one onboard file. Read-only: nothing on the keyboard changes.
+    pub fn read_file(&self, id: u16) -> Result<Vec<u8>> {
+        let [lo, hi] = id.to_le_bytes();
+        let mut r = self.request(&[cmd::OPEN, FILE_HANDLE, lo, hi])?;
+        if r[2] == 0x03 {
+            // already open from before: close and try again
+            self.request(&[cmd::CLOSE, 0x01, FILE_HANDLE])?;
+            r = self.request(&[cmd::OPEN, FILE_HANDLE, lo, hi])?;
+        }
+        if r[2] != 0 {
+            return Err(Error::Refused(cmd::OPEN, r[2]));
+        }
+        let result = (|| {
+            let p = self.request(&[cmd::PROBE, FILE_HANDLE])?;
+            if p[2] != 0 {
+                return Err(Error::Refused(cmd::PROBE, p[2]));
+            }
+            let len = u32::from_le_bytes([p[5], p[6], p[7], p[8]]) as usize;
+            if len > MAX_FILE {
+                return Err(Error::TooBig(len));
+            }
+            let mut data = Vec::with_capacity(len);
+            while data.len() < len {
+                let d = self.request(&[cmd::READ, FILE_HANDLE])?;
+                if d[2] != 0 {
+                    return Err(Error::Refused(cmd::READ, d[2]));
+                }
+                let take = (len - data.len()).min(READ_CHUNK);
+                data.extend_from_slice(&d[3..3 + take]);
+            }
+            Ok(data)
+        })();
+        let _ = self.request(&[cmd::CLOSE, 0x01, FILE_HANDLE]);
+        result
+    }
+
+    /// Reads every onboard file Prism can find, starting from the fixed
+    /// system files and following the file numbers they mention (profile
+    /// files are numbered 0x6dXX). Returns (file number, contents) pairs.
+    pub fn read_all_files(&self) -> Vec<(u16, Result<Vec<u8>>)> {
+        let mut todo: std::collections::VecDeque<u16> = ROOT_FILES.into_iter().collect();
+        let mut seen: std::collections::BTreeSet<u16> = todo.iter().copied().collect();
+        let mut out = Vec::new();
+        while let Some(id) = todo.pop_front() {
+            if out.len() >= MAX_FILES {
+                break;
+            }
+            let r = self.read_file(id);
+            // A number that only looked like a file reference: no such file.
+            if matches!(r, Err(Error::Refused(cmd::OPEN, 0x01))) && !ROOT_FILES.contains(&id) {
+                continue;
+            }
+            if let Ok(data) = &r {
+                for w in data.windows(2) {
+                    let ref_id = u16::from_le_bytes([w[0], w[1]]);
+                    if w[1] == 0x6d && seen.insert(ref_id) {
+                        todo.push_back(ref_id);
+                    }
+                }
+            }
+            out.push((id, r));
+        }
+        out
+    }
+
     /// Shows `colors` (screen colors, one per slot). Corrected for LEDs with
     /// [`Rgb::to_led`].
     pub fn set_colors(&self, colors: &[Rgb; SLOTS]) -> Result<()> {
@@ -173,7 +273,7 @@ impl K65Mini {
 
     /// Hands lighting back to the keyboard's own saved effect.
     pub fn release(&self) -> Result<()> {
-        self.send(&[cmd::CLOSE, HANDLE])?;
+        self.send(&[cmd::CLOSE, 0x01, HANDLE])?;
         self.send(&[cmd::SET, property::MODE, 0x00, mode::HARDWARE])?;
         Ok(())
     }

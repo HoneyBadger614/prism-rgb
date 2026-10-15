@@ -1,0 +1,11 @@
+[package]
+name = "prism-core"
+description = "Device layer for Prism: finds and talks to Corsair devices on Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Uses the system's hidapi (hidraw backend) instead of bundling a copy.
+hidapi = { version = "2.6", default-features = false, features = ["linux-shared-hidraw"] }

@@ -38,8 +38,11 @@ mod mode {
 }
 
 /// The mouse's lighting zones, in the order Prism uses them, with the id
-/// each has in the color message.
-pub const ZONES: [(&str, u8); 4] = [("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("Rear", 3)];
+/// each has in the color message. Checked on the real mouse: id 3 is the
+/// DPI indicator and id 6 the back light under the logo.
+pub const ZONES: [(&str, u8); 5] =
+    [("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3), ("Back", 6)];
+pub const ZONE_COUNT: usize = ZONES.len();
 
 #[derive(Debug)]
 pub enum Error {
@@ -73,13 +76,19 @@ fn report(body: &[u8]) -> [u8; REPORT_LEN] {
     buf
 }
 
-/// The message setting every zone: for each zone, its id then red, green, blue.
-fn color_report(colors: &[Rgb; 4]) -> [u8; REPORT_LEN] {
-    let mut body = vec![cmd::COLOR, ZONES.len() as u8, 0x01];
-    for ((_, id), c) in ZONES.iter().zip(colors) {
+/// A color message for any zone ids: for each, its id then red, green, blue.
+fn zones_report(zones: &[(u8, Rgb)]) -> [u8; REPORT_LEN] {
+    let mut body = vec![cmd::COLOR, zones.len() as u8, 0x01];
+    for (id, c) in zones {
         body.extend_from_slice(&[*id, c.r, c.g, c.b]);
     }
     report(&body)
+}
+
+/// The message setting every known zone, in [`ZONES`] order.
+fn color_report(colors: &[Rgb; ZONE_COUNT]) -> [u8; REPORT_LEN] {
+    let zones: Vec<(u8, Rgb)> = ZONES.iter().zip(colors).map(|((_, id), c)| (*id, *c)).collect();
+    zones_report(&zones)
 }
 
 pub struct Nightsword {
@@ -104,8 +113,15 @@ impl Nightsword {
 
     /// Shows one screen color per zone, in [`ZONES`] order. Corrected for
     /// LEDs with [`Rgb::to_led`].
-    pub fn set_colors(&self, colors: &[Rgb; 4]) -> Result<()> {
+    pub fn set_colors(&self, colors: &[Rgb; ZONE_COUNT]) -> Result<()> {
         self.dev.write(&color_report(&colors.map(|c| c.to_led())))?;
+        Ok(())
+    }
+
+    /// Sets colors by raw zone id (for finding zones Prism doesn't know yet).
+    pub fn set_zone_ids(&self, zones: &[(u8, Rgb)]) -> Result<()> {
+        let led: Vec<(u8, Rgb)> = zones.iter().map(|(id, c)| (*id, c.to_led())).collect();
+        self.dev.write(&zones_report(&led))?;
         Ok(())
     }
 
@@ -120,9 +136,13 @@ impl Nightsword {
     }
 }
 
-/// Where each zone sits on the mouse, front to back, for effects.
+/// Where each zone sits on the mouse for effects: x runs front to back,
+/// y back to front (so the second direction is the first reversed).
 pub fn surface() -> crate::effects::Surface {
-    crate::effects::Surface::grid(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)])
+    // front, scroll wheel, logo (palm), DPI light (left side, mid-mouse), back
+    let along = [0.0, 1.0, 3.0, 2.0, 4.0];
+    let pts: Vec<(f64, f64)> = along.iter().map(|&a| (a, 3.0 - a)).collect();
+    crate::effects::Surface::grid(&pts)
 }
 
 #[cfg(test)]
@@ -131,12 +151,12 @@ mod tests {
 
     #[test]
     fn color_report_layout() {
-        let colors = [Rgb::new(1, 2, 3), Rgb::new(4, 5, 6), Rgb::new(7, 8, 9), Rgb::new(10, 11, 12)];
+        let colors = [Rgb::new(1, 2, 3), Rgb::new(4, 5, 6), Rgb::new(7, 8, 9), Rgb::new(10, 11, 12), Rgb::new(13, 14, 15)];
         let r = color_report(&colors);
-        assert_eq!(&r[..5], &[0x00, 0x07, 0x22, 0x04, 0x01]);
-        // front (id 1), scroll (4), logo (2), rear (3)
-        assert_eq!(&r[5..21], &[1, 1, 2, 3, 4, 4, 5, 6, 2, 7, 8, 9, 3, 10, 11, 12]);
-        assert!(r[21..].iter().all(|&b| b == 0));
+        assert_eq!(&r[..5], &[0x00, 0x07, 0x22, 0x05, 0x01]);
+        // front (id 1), scroll (4), logo (2), DPI light (3), back (6)
+        assert_eq!(&r[5..25], &[1, 1, 2, 3, 4, 4, 5, 6, 2, 7, 8, 9, 3, 10, 11, 12, 6, 13, 14, 15]);
+        assert!(r[25..].iter().all(|&b| b == 0));
     }
 
     #[test]

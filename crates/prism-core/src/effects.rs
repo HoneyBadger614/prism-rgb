@@ -112,11 +112,14 @@ pub struct Profile {
     pub layers: Vec<Layer>,
     /// Keyboard layers. Profiles saved before keyboards were supported get
     /// the Ember fade.
-    #[serde(default = "default_keyboard_layers")]
+    #[serde(default = "default_device_layers")]
     pub keyboard: Vec<Layer>,
+    /// Mouse layers. Older profiles get the Ember fade.
+    #[serde(default = "default_device_layers")]
+    pub mouse: Vec<Layer>,
 }
 
-fn default_keyboard_layers() -> Vec<Layer> {
+fn default_device_layers() -> Vec<Layer> {
     vec![Layer { name: "Ember fade".into(), ..Layer::default() }]
 }
 
@@ -282,14 +285,15 @@ impl LightingStore {
         let profile = Profile {
             name: "My profile".into(),
             layers: vec![Layer { name: "Ember fade".into(), ..Layer::default() }],
-            keyboard: default_keyboard_layers(),
+            keyboard: default_device_layers(),
+            mouse: default_device_layers(),
         };
         Self { active: 0, brightness: 100, profiles: vec![profile] }
     }
 
     /// Fixes anything out of range: numbers, names, too many profiles or
     /// layers, and LEDs that don't exist on the fans or keyboard.
-    pub fn sanitized(mut self, fans: &Surface, keyboard: &Surface) -> Self {
+    pub fn sanitized(mut self, fans: &Surface, keyboard: &Surface, mouse: &Surface) -> Self {
         self.brightness = self.brightness.min(100);
         self.profiles.truncate(MAX_PROFILES);
         if self.profiles.is_empty() {
@@ -302,6 +306,7 @@ impl LightingStore {
                 name: clean_name(&p.name, "Profile"),
                 layers: sanitize_layers(p.layers, fans),
                 keyboard: sanitize_layers(p.keyboard, keyboard),
+                mouse: sanitize_layers(p.mouse, mouse),
             })
             .collect();
         self.active = self.active.min(self.profiles.len() - 1);
@@ -315,7 +320,7 @@ impl LightingStore {
     /// Whether the active profile changes over time (and so needs constant updates).
     pub fn is_animated(&self) -> bool {
         self.active_profile().is_some_and(|p| {
-            p.layers.iter().chain(&p.keyboard).any(|l| l.enabled && l.effect.is_animated())
+            p.layers.iter().chain(&p.keyboard).chain(&p.mouse).any(|l| l.enabled && l.effect.is_animated())
         })
     }
 }
@@ -404,7 +409,7 @@ mod tests {
     }
 
     fn one(layer: Layer) -> LightingStore {
-        LightingStore { active: 0, brightness: 100, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![] }] }
+        LightingStore { active: 0, brightness: 100, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![] }] }
     }
 
     fn fx(effect: Effect, spread: Spread) -> Layer {
@@ -492,7 +497,7 @@ mod tests {
         let hub_ring = LightingStore {
             active: 0,
             brightness: 100,
-            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![] }],
+            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![] }],
         };
         let f = render(&hub_ring, &layout, 1.0);
         for fan in 0..3 {
@@ -531,9 +536,9 @@ mod tests {
         let s = LightingStore {
             active: 99,
             brightness: 200,
-            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![] }],
+            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![] }],
         }
-        .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]));
+        .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert_eq!((s.active, s.brightness), (0, 100));
         assert_eq!(s.profiles[0].name.chars().count(), MAX_NAME_LEN);
         assert_eq!(s.profiles[0].layers.len(), MAX_LAYERS);
@@ -542,7 +547,7 @@ mod tests {
         assert_eq!(l.target, Target::Leds { leds: vec![LedRef(0, 47)] });
 
         let empty = LightingStore { active: 0, brightness: 100, profiles: vec![] }
-            .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]));
+            .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert!(!empty.profiles.is_empty());
     }
 
@@ -562,6 +567,7 @@ mod tests {
         let old = r#"{"active":0,"brightness":80,"profiles":[{"name":"Mine","layers":[]}]}"#;
         let s: LightingStore = serde_json::from_str(old).unwrap();
         assert_eq!(s.profiles[0].keyboard.len(), 1);
+        assert_eq!(s.profiles[0].mouse.len(), 1);
     }
 
     #[test]

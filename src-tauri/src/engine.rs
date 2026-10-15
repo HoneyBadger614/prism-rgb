@@ -16,6 +16,7 @@ use hidapi::HidApi;
 use prism_core::effects::{render_layers, Layer, LightingStore, Profile, Surface};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
+use prism_core::nightsword::{self, Nightsword};
 use prism_core::Rgb;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -34,6 +35,7 @@ enum Msg {
 struct Frame<'a> {
     node: &'a [Vec<Rgb>],
     keyboard: &'a [Rgb],
+    mouse: &'a [Rgb],
 }
 
 /// The devices Prism drives, plus how they're laid out.
@@ -41,6 +43,7 @@ pub struct Devices {
     pub fans: Surface,
     pub keyboard: Surface,
     pub keys: Vec<Key>,
+    pub mouse: Surface,
 }
 
 pub struct Engine {
@@ -83,9 +86,10 @@ impl Engine {
             let mut api = HidApi::new().ok();
             let mut node: Link<LightingNode> = Link::new();
             let mut kb: Link<K65Mini> = Link::new();
+            let mut mouse: Link<Nightsword> = Link::new();
             let mut unsaved_since: Option<Instant> = None;
             let start = Instant::now();
-            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![] };
+            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![] };
 
             loop {
                 node.reconnect(&mut api, |api| {
@@ -94,12 +98,15 @@ impl Engine {
                     (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
                 });
                 kb.reconnect(&mut api, |api| K65Mini::open(api).ok());
+                mouse.reconnect(&mut api, |api| Nightsword::open(api).ok());
 
                 let t = start.elapsed().as_secs_f64();
                 let profile = cfg.active_profile().unwrap_or(&empty);
                 let fans = render_layers(&profile.layers, &devices.fans, cfg.brightness, t);
                 let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
                 let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
+                let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
+                let zones: &[Rgb] = zones.first().map_or(&[], Vec::as_slice);
 
                 if let Some(n) = &node.dev {
                     let sent = fans
@@ -116,7 +123,12 @@ impl Engine {
                         kb.dev = None;
                     }
                 }
-                let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys });
+                if let (Some(m), Ok(z)) = (&mouse.dev, <[Rgb; nightsword::ZONE_COUNT]>::try_from(zones)) {
+                    if m.set_colors(&z).is_err() {
+                        mouse.dev = None;
+                    }
+                }
+                let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys, mouse: zones });
 
                 if unsaved_since.is_some_and(|t| t.elapsed() >= SAVE_AFTER) {
                     save(&save_to, &cfg);
@@ -127,7 +139,7 @@ impl Engine {
                 if unsaved_since.is_some() {
                     wait = wait.min(SAVE_AFTER);
                 }
-                if node.dev.is_none() || kb.dev.is_none() {
+                if node.dev.is_none() || kb.dev.is_none() || mouse.dev.is_none() {
                     wait = wait.min(RECONNECT_EVERY);
                 }
 
@@ -147,6 +159,9 @@ impl Engine {
                         }
                         if let Some(k) = kb.dev {
                             let _ = k.release();
+                        }
+                        if let Some(m) = mouse.dev {
+                            let _ = m.release();
                         }
                         return;
                     }
@@ -181,15 +196,15 @@ pub fn load(path: &Option<PathBuf>, devices: &Devices) -> LightingStore {
     let text = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
     let Some(text) = text else { return LightingStore::starter() };
     if let Ok(store) = serde_json::from_str::<LightingStore>(&text) {
-        return store.sanitized(&devices.fans, &devices.keyboard);
+        return store.sanitized(&devices.fans, &devices.keyboard, &devices.mouse);
     }
     let mut store = LightingStore::starter();
     if let Ok(old) = serde_json::from_str::<Layer>(&text) {
         let layer = Layer { name: "Main".into(), ..old };
-        let keyboard = store.profiles[0].keyboard.clone();
-        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard });
+        let (keyboard, mouse) = (store.profiles[0].keyboard.clone(), store.profiles[0].mouse.clone());
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse });
     }
-    store.sanitized(&devices.fans, &devices.keyboard)
+    store.sanitized(&devices.fans, &devices.keyboard, &devices.mouse)
 }
 
 fn save(path: &Option<PathBuf>, cfg: &LightingStore) {

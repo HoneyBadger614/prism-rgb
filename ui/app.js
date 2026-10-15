@@ -125,12 +125,12 @@ function render() {
   document.querySelector(".tabs").hidden = onlyLighting;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.t === tab)));
 
-  const nodeLighting = (d.kind === "lighting" || d.kind === "keyboard") && tab === "light";
+  const nodeLighting = ["lighting", "keyboard", "mouse"].includes(d.kind) && tab === "light";
   $("node-lighting").hidden = !nodeLighting;
   $("visual").hidden = nodeLighting;
   $("soon").hidden = nodeLighting;
   if (nodeLighting) {
-    Lighting.show(d.kind === "keyboard" ? "keyboard" : "node");
+    Lighting.show({ lighting: "node", keyboard: "keyboard", mouse: "mouse" }[d.kind]);
     return;
   }
   $("soon").innerHTML = SOON[tab];

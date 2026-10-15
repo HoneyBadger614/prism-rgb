@@ -1,4 +1,4 @@
-// Prism lighting screen for the Lighting Node Pro and the K65 keyboard:
+// Prism lighting screen for the Lighting Node Pro, K65 keyboard and Nightsword mouse:
 // profiles, layers, LED selection and painting, the effect picker, and the
 // layer editor. The same screen serves both; `dev` says which is showing.
 // Uses `invoke`, `$` and `el` from app.js.
@@ -34,9 +34,9 @@ const Lighting = (() => {
     check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
   };
 
-  let light = null;          // { store, layout (fans), keys (keyboard) }
-  let frame = { node: [], keyboard: [] }; // latest colors sent to each device
-  let dev = "node";          // which device is showing: "node" or "keyboard"
+  let light = null;          // { store, layout (fans), keys (keyboard), zones (mouse) }
+  let frame = { node: [], keyboard: [], mouse: [] }; // latest colors sent to each device
+  let dev = "node";          // which device is showing: "node", "keyboard" or "mouse"
   let selection = new Set(); // "channel:index"
   let layerIndex = 0;        // layer being edited, in the active profile
   let activeSlot = "color1";
@@ -52,13 +52,15 @@ const Lighting = (() => {
 
   const profile = () => light.store.profiles[light.store.active];
   // The showing device's layers in the active profile.
-  const stack = () => profile()[dev === "node" ? "layers" : "keyboard"];
+  const FIELD = { node: "layers", keyboard: "keyboard", mouse: "mouse" };
+  const stack = () => profile()[FIELD[dev]];
   const layer = () => stack()[layerIndex];
   const key = (c, i) => `${c}:${i}`;
   const ref = (k) => k.split(":").map(Number);
 
   function allLeds() {
     if (dev === "keyboard") return light.keys.map((_, i) => key(0, i));
+    if (dev === "mouse") return light.zones.map((_, i) => key(0, i));
     const out = [];
     light.layout.forEach((ch, c) => {
       for (let i = 0; i < ch.fans * (ch.inner + ch.outer); i++) out.push(key(0 + c, i));
@@ -85,6 +87,7 @@ const Lighting = (() => {
   // Named groups: All, Hubs, Rings, Fan 1, Fan 2... (or key groups).
   function groups() {
     if (dev === "keyboard") return keyGroups();
+    if (dev === "mouse") return [["All", allLeds()], ...light.zones.map((name, i) => [name, [key(0, i)]])];
     const g = [["All", allLeds()], ["Hubs", []], ["Rings", []]];
     let fanNo = 0;
     light.layout.forEach((ch, c) => {
@@ -107,14 +110,15 @@ const Lighting = (() => {
   const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 
   function describeTarget(target) {
-    if (target.kind === "all") return dev === "keyboard" ? "All keys" : "All LEDs";
+    if (target.kind === "all") return `All ${unit(2)}`;
     const leds = target.leds.map(([c, i]) => key(c, i));
     if (!leds.length) return "No LEDs";
     for (const [name, set] of groups()) if (sameSet(leds, set)) return name === "All" ? describeTarget({ kind: "all" }) : name;
     return `${leds.length} ${unit(leds.length)}`;
   }
 
-  const unit = (n) => (dev === "keyboard" ? (n === 1 ? "key" : "keys") : n === 1 ? "LED" : "LEDs");
+  const UNITS = { node: ["LED", "LEDs"], keyboard: ["key", "keys"], mouse: ["zone", "zones"] };
+  const unit = (n) => UNITS[dev][n === 1 ? 0 : 1];
 
   function send() {
     // Coalesce rapid changes (slider drags) into one update per screen refresh.
@@ -174,6 +178,26 @@ const Lighting = (() => {
       layers: () => [
         newLayer("rainbow", { name: "Rainbow" }),
         newLayer("static", { name: "Modifiers", color1: PINK, target: ledsTarget(group("Modifiers")) }),
+      ],
+    },
+  ];
+
+  // Ready-made multi-layer looks for the mouse.
+  const MOUSE_COMBOS = [
+    {
+      name: "Ember split", desc: "Purple logo, hot pink front and scroll wheel",
+      thumb: `linear-gradient(90deg, ${PINK} 0 50%, ${PURPLE} 50%)`,
+      layers: () => [
+        newLayer("static", { name: "Logo", color1: PURPLE }),
+        newLayer("static", { name: "Front & wheel", color1: PINK, target: ledsTarget([...group("Front"), ...group("Scroll wheel")]) }),
+      ],
+    },
+    {
+      name: "Logo only", desc: "Just the logo glows; everything else off",
+      thumb: `radial-gradient(circle, ${PINK} 0 26%, #000 28%)`,
+      layers: () => [
+        newLayer("static", { name: "Off", color1: "#000000" }),
+        newLayer("breathe", { name: "Logo", color1: PINK, color2: PURPLE, target: ledsTarget(group("Logo")) }),
       ],
     },
   ];
@@ -331,7 +355,8 @@ const Lighting = (() => {
       return card;
     }));
 
-    $("fx-combos").replaceChildren(...(dev === "keyboard" ? KEY_COMBOS : COMBOS).map((c) => {
+    const combos = { node: COMBOS, keyboard: KEY_COMBOS, mouse: MOUSE_COMBOS }[dev];
+    $("fx-combos").replaceChildren(...combos.map((c) => {
       const card = el("button", "fx-card");
       const t = el("span", "fx-thumb");
       t.style.background = c.thumb;
@@ -431,7 +456,7 @@ const Lighting = (() => {
   }
 
   function hitTest(x, y) {
-    if (dev === "keyboard") {
+    if (dev !== "node") {
       return spots.find((s) => x >= s.rect[0] && x <= s.rect[0] + s.rect[2] && y >= s.rect[1] && y <= s.rect[1] + s.rect[3]) || null;
     }
     let best = null, bestD = 18 * 18;
@@ -502,6 +527,7 @@ const Lighting = (() => {
     const canvas = $("fans");
     if (!light || canvas.offsetParent === null) return;
     if (dev === "keyboard") return drawKeyboard(canvas);
+    if (dev === "mouse") return drawMouse(canvas);
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     canvas.width = Math.round(w * dpr);
@@ -691,6 +717,105 @@ const Lighting = (() => {
     }
   }
 
+  // The Nightsword from above, with its four zones glowing and labeled.
+  // Drawn in a 120 x 190 box (front at the top), scaled to fit.
+  const MOUSE_BODY = "M60 6c30 0 50 22 50 60v58c0 36-22 60-50 60S10 160 10 124V66C10 28 30 6 60 6z";
+  // Each zone, in ZONES order: how to draw it, and a box around it for clicking.
+  const MOUSE_ZONES = [
+    { path: "M36 20c10-7 38-7 48 0", width: 5, box: [34, 12, 52, 12], side: 1 },  // Front: arc along the front
+    { rect: [55, 26, 10, 24, 5], box: [53, 24, 14, 28], side: 1 },                  // Scroll wheel
+    { path: "M42 150c6 10 30 10 36 0", width: 6, box: [40, 146, 40, 16], side: -1 }, // Logo, on the palm
+    { rect: [12, 80, 5, 40, 2.5], box: [9, 78, 11, 44], side: -1 },                 // DPI indicator, left side
+    { path: "M38 172c9 8 35 8 44 0", width: 4, box: [36, 167, 48, 14], side: 1 },   // Back light, under the logo
+  ];
+
+  function drawMouse(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    $("fan-labels").hidden = true;
+
+    const css = getComputedStyle(document.documentElement);
+    const raised = css.getPropertyValue("--raised").trim();
+    const edge = css.getPropertyValue("--line").trim();
+    const muted = css.getPropertyValue("--muted").trim();
+    const font = css.getPropertyValue("--font-mono").trim();
+
+    const s = Math.min((h - 20) / 190, (w * 0.42) / 120);
+    const ox = w / 2 - 60 * s, oy = (h - 190 * s) / 2;
+    const toScreen = (x, y) => [ox + x * s, oy + y * s];
+    const inMouse = (fn) => {
+      ctx.save();
+      ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
+      fn();
+      ctx.restore();
+    };
+
+    // body and button split
+    inMouse(() => {
+      ctx.fillStyle = raised;
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 2 / s * 0.9;
+      const body = new Path2D(MOUSE_BODY);
+      ctx.fill(body);
+      ctx.stroke(body);
+      ctx.beginPath(); ctx.moveTo(60, 6); ctx.lineTo(60, 64); ctx.stroke();
+    });
+
+    spots = [];
+    const marks = [];
+    MOUSE_ZONES.forEach((z, i) => {
+      const c = frame.mouse[i] || "#000000";
+      inMouse(() => {
+        ctx.shadowColor = c;
+        ctx.shadowBlur = 18 * s;
+        if (z.rect) {
+          const [x, y, rw, rh, r] = z.rect;
+          ctx.fillStyle = c;
+          ctx.beginPath(); ctx.roundRect(x, y, rw, rh, r); ctx.fill();
+        } else {
+          ctx.strokeStyle = c;
+          ctx.lineWidth = z.width;
+          ctx.lineCap = "round";
+          ctx.stroke(new Path2D(z.path));
+        }
+      });
+      const [bx, by, bw, bh] = z.box;
+      const [x0, y0] = toScreen(bx, by);
+      const spot = { key: key(0, i), x: x0 + (bw * s) / 2, y: y0 + (bh * s) / 2, rect: [x0, y0, bw * s, bh * s] };
+      spots.push(spot);
+      if (selection.has(spot.key)) marks.push(spot);
+    });
+
+    // labels with pointer lines, left or right of the mouse
+    ctx.font = `12px ${font}`;
+    ctx.textBaseline = "middle";
+    MOUSE_ZONES.forEach((z, i) => {
+      const sp = spots[i];
+      const [left] = toScreen(-14, 0);
+      const [right] = toScreen(134, 0);
+      const toX = z.side < 0 ? sp.rect[0] - 4 : sp.rect[0] + sp.rect[2] + 4;
+      const lx = z.side < 0 ? left : right;
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(z.side < 0 ? lx + 6 : lx - 6, sp.y); ctx.lineTo(toX, sp.y); ctx.stroke();
+      ctx.fillStyle = muted;
+      ctx.textAlign = z.side < 0 ? "right" : "left";
+      ctx.fillText(light.zones[i], lx, sp.y);
+    });
+
+    for (const m of marks) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.roundRect(m.rect[0] - 3, m.rect[1] - 3, m.rect[2] + 6, m.rect[3] + 6, 6); ctx.stroke();
+    }
+  }
+
   /* ---------- layer editor ---------- */
 
   function syncEditor() {
@@ -717,8 +842,9 @@ const Lighting = (() => {
     $("target-all").textContent = describeTarget({ kind: "all" });
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.spread === l.spread)));
-    $("spread-across").textContent = dev === "keyboard" ? "Left to right" : "Across fans";
-    $("spread-per-fan").textContent = dev === "keyboard" ? "Top to bottom" : "Per fan";
+    const SPREAD = { node: ["Across fans", "Per fan"], keyboard: ["Left to right", "Top to bottom"], mouse: ["Front to back", "Back to front"] };
+    $("spread-across").textContent = SPREAD[dev][0];
+    $("spread-per-fan").textContent = SPREAD[dev][1];
     $("field-colors").hidden = !fx.c1;
     $("field-spread").hidden = !fx.spread;
     $("field-speed").hidden = !fx.speed;
@@ -844,10 +970,13 @@ const Lighting = (() => {
   function renderAll() {
     if (!light) return;
     $("node-lighting").classList.toggle("keyboard", dev === "keyboard");
-    $("select-label").textContent = dev === "keyboard" ? "Select keys" : "Select LEDs";
-    $("select-hint").textContent = dev === "keyboard"
-      ? "Click keys on the keyboard, or drag a box around them. Hold Shift to add more."
-      : "Click LEDs in the preview, or drag a box around them. Hold Shift to add more.";
+    $("node-lighting").classList.toggle("mouse", dev === "mouse");
+    $("select-label").textContent = `Select ${unit(2)}`;
+    $("select-hint").textContent = {
+      node: "Click LEDs in the preview, or drag a box around them. Hold Shift to add more.",
+      keyboard: "Click keys on the keyboard, or drag a box around them. Hold Shift to add more.",
+      mouse: "Click a zone on the mouse. Hold Shift to add more.",
+    }[dev];
     renderProfiles();
     $("master").value = light.store.brightness;
     $("master").style.setProperty("--fill", `${light.store.brightness}%`);
@@ -886,6 +1015,7 @@ const Lighting = (() => {
         name: `Profile ${light.store.profiles.length + 1}`,
         layers: [newLayer("gradient", { name: "Ember fade" })],
         keyboard: [newLayer("gradient", { name: "Ember fade" })],
+        mouse: [newLayer("gradient", { name: "Ember fade" })],
       });
     });
     $("profile-dup").addEventListener("click", () => {
@@ -915,7 +1045,7 @@ const Lighting = (() => {
 
   async function init() {
     const state = await invoke("get_lighting");
-    light = { store: state.store, layout: state.layout, keys: state.keys };
+    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones };
     layerIndex = Math.max(0, stack().length - 1);
 
     $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));

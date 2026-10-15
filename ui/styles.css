@@ -349,3 +349,4 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 
 /* keyboard preview is wider than tall */
 .node-lighting.keyboard #fans { height: auto; aspect-ratio: 3.3 / 1; max-height: 460px; }
+.node-lighting.mouse #fans { height: 340px; }

@@ -47,6 +47,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Lighting Node Pro found, firmware {a}.{b}.{c}");
 
     for ch in 0..CHANNELS {
+        node.set_brightness(ch, 100)?;
         node.set_colors(ch, &colors)?;
     }
     println!("Colors set. Holding for {seconds} s...");

@@ -33,6 +33,18 @@ impl Rgb {
         Some(Self::new(part(0)?, part(2)?, part(4)?))
     }
 
+    /// Converts a screen color to what an LED needs to look the same.
+    ///
+    /// Screen colors are gamma-encoded (small numbers look darker than they
+    /// are), but LEDs are linear: a value of 45 really is 18% power. Without
+    /// this, small amounts of a color wash out the main one (hot pink looks
+    /// pastel).
+    pub fn to_led(self) -> Rgb {
+        const GAMMA: f32 = 2.2;
+        let f = |v: u8| ((v as f32 / 255.0).powf(GAMMA) * 255.0).round() as u8;
+        Rgb::new(f(self.r), f(self.g), f(self.b))
+    }
+
     /// Blends towards `other`; `t` = 0 gives self, 1 gives other.
     pub fn mix(self, other: Rgb, t: f32) -> Rgb {
         let t = t.clamp(0.0, 1.0);
@@ -166,6 +178,15 @@ mod tests {
         assert_eq!(a.mix(b, 0.0), a);
         assert_eq!(a.mix(b, 1.0), b);
         assert_eq!(a.mix(b, 0.5), Rgb::new(100, 50, 25));
+    }
+
+    #[test]
+    fn led_correction_keeps_ends_and_darkens_small_values() {
+        assert_eq!(Rgb::new(0, 255, 0).to_led(), Rgb::new(0, 255, 0));
+        let pink = Rgb::from_hex("ff2d95").unwrap().to_led();
+        assert_eq!(pink.r, 255);
+        assert!(pink.g < 10, "green should nearly vanish, got {}", pink.g);
+        assert!(pink.b < 0x95);
     }
 
     #[test]

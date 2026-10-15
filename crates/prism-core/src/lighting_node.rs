@@ -150,7 +150,8 @@ impl LightingNode {
         Ok((r[1], r[2], r[3]))
     }
 
-    /// Shows `colors` on a channel (0 or 1). LED 1 is the first entry.
+    /// Shows `colors` (screen colors) on a channel (0 or 1). LED 1 is the
+    /// first entry. Colors are corrected for LEDs with [`Rgb::to_led`].
     pub fn set_colors(&self, channel: u8, colors: &[Rgb]) -> Result<()> {
         if channel >= CHANNELS {
             return Err(Error::BadChannel(channel));
@@ -158,8 +159,9 @@ impl LightingNode {
         if colors.len() > MAX_LEDS_PER_CHANNEL {
             return Err(Error::TooManyLeds(colors.len()));
         }
+        let led: Vec<Rgb> = colors.iter().map(|c| c.to_led()).collect();
         self.checked(cmd::PORT_STATE, &[channel, port_state::SOFTWARE])?;
-        for r in direct_reports(channel, colors) {
+        for r in direct_reports(channel, &led) {
             self.send_report(&r)?;
         }
         self.commit()

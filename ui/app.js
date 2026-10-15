@@ -34,6 +34,18 @@ const KB_ROWS = [
 ];
 
 const $ = (id) => document.getElementById(id);
+
+// Keyboard size (S / M / L), remembered on this computer.
+function setKbSize(size) {
+  document.documentElement.dataset.kbSize = size;
+  document.querySelectorAll("[data-kb-size]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kbSize === size)));
+  try { localStorage.setItem("prism-kb-size", size); } catch (e) {}
+  window.dispatchEvent(new Event("resize")); // redraw the canvas at the new size
+}
+document.querySelectorAll("[data-kb-size]").forEach((b) => b.addEventListener("click", () => setKbSize(b.dataset.kbSize)));
+let savedKbSize = "m";
+try { savedKbSize = localStorage.getItem("prism-kb-size") || "m"; } catch (e) {}
+setKbSize(["s", "m", "l"].includes(savedKbSize) ? savedKbSize : "m");
 let devices = [];
 let selected = 0;
 let tab = "light";

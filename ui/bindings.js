@@ -107,6 +107,7 @@ const Bindings = (() => {
     $("bind-pick-label").textContent = dev === "keyboard" ? "Pick a key" : "Pick a mouse button";
     $("bind-capture").textContent = dev === "keyboard" ? "Press a key to pick it" : "Press a mouse button";
     $("bind-kb").hidden = dev !== "keyboard";
+    $("bind-kb-size").hidden = dev !== "keyboard";
     $("bind-mouse").hidden = dev !== "mouse";
 
     if (dev === "keyboard") {

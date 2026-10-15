@@ -688,13 +688,7 @@ const Lighting = (() => {
       ctx.beginPath(); ctx.roundRect(x + 2, y + 2, kw - 4, kh - 6, 4); ctx.fill();
       ctx.globalAlpha = 1;
 
-      if (k.label) {
-        ctx.fillStyle = muted;
-        ctx.font = `${Math.max(9, u * 1.15)}px ${font}`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(k.label, x + kw / 2, y + kh / 2 - 2);
-      }
+      if (k.label) drawKeyLabel(ctx, k.label, x, y, kw, kh, u, muted, font);
 
       const s = { key: key(0, i), x: x + kw / 2, y: y + kh / 2, rect: [x, y, kw, kh] };
       spots.push(s);
@@ -817,6 +811,37 @@ const Lighting = (() => {
       ctx.setLineDash([]);
       ctx.beginPath(); ctx.roundRect(m.rect[0] - 3, m.rect[1] - 3, m.rect[2] + 6, m.rect[3] + 6, 6); ctx.stroke();
     }
+  }
+
+  // Short forms for when a key is too narrow for its full label.
+  const SHORT_LABELS = { Backspace: "Bksp", Enter: "Ent", Shift: "Shft", Caps: "Cap", Menu: "Mnu", Ctrl: "Ctl", Space: "Spc" };
+
+  // Draws a key's label as large as fits (down to 7px), switching to a
+  // short form if needed, and never outside the key.
+  function drawKeyLabel(ctx, label, x, y, kw, kh, u, color, font) {
+    const room = kw - 6;
+    const start = Math.max(9, u * 1.15);
+    let text = label, size = start;
+    const fits = (t, px) => {
+      ctx.font = `${px}px ${font}`;
+      return ctx.measureText(t).width <= room;
+    };
+    while (size > 7 && !fits(text, size)) size -= 0.5;
+    if (!fits(text, size) && SHORT_LABELS[label]) {
+      text = SHORT_LABELS[label];
+      size = start;
+      while (size > 7 && !fits(text, size)) size -= 0.5;
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 2, y + 2, kw - 4, kh - 4);
+    ctx.clip();
+    ctx.fillStyle = color;
+    ctx.font = `${size}px ${font}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x + kw / 2, y + kh / 2 - 2);
+    ctx.restore();
   }
 
   /* ---------- layer editor ---------- */

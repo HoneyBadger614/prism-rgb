@@ -73,6 +73,11 @@
               <section class="preview" aria-label="Choose a key or button">
                 <div class="preview-head">
                   <span class="label" id="bind-pick-label">Pick a key</span>
+                  <div class="seg kb-size" id="bind-kb-size" role="group" aria-label="Keyboard size">
+                    <button data-kb-size="s" title="Small">S</button>
+                    <button data-kb-size="m" title="Medium">M</button>
+                    <button data-kb-size="l" title="Large">L</button>
+                  </div>
                   <button class="mini" id="bind-capture">Press a key to pick it</button>
                 </div>
                 <div class="bind-kb" id="bind-kb"></div>
@@ -233,6 +238,11 @@
               <section class="preview" aria-label="Live preview">
                 <div class="preview-head">
                   <span class="label">Live preview</span>
+                  <div class="seg kb-size" role="group" aria-label="Keyboard size">
+                    <button data-kb-size="s" title="Small">S</button>
+                    <button data-kb-size="m" title="Medium">M</button>
+                    <button data-kb-size="l" title="Large">L</button>
+                  </div>
                   <div class="master">
                     <label class="label" for="master">Overall brightness <span class="val" id="master-val"></span></label>
                     <input type="range" id="master" min="0" max="100" step="1">

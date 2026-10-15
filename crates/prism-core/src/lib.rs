@@ -54,6 +54,16 @@ impl Rgb {
         Rgb::new(f(self.r, other.r), f(self.g, other.g), f(self.b, other.b))
     }
 
+    /// From hue (0–360), saturation and value (0–1).
+    pub fn from_hsv(h: f32, s: f32, v: f32) -> Rgb {
+        let f = |n: f32| {
+            let k = (n + h / 60.0).rem_euclid(6.0);
+            let x = v - v * s * k.min(4.0 - k).clamp(0.0, 1.0);
+            (x * 255.0).round() as u8
+        };
+        Rgb::new(f(5.0), f(3.0), f(1.0))
+    }
+
     /// Dims towards black; `level` = 1 keeps the color, 0 is off.
     pub fn scale(self, level: f32) -> Rgb {
         Rgb::new(0, 0, 0).mix(self, level)
@@ -203,6 +213,15 @@ mod tests {
         assert_eq!(a.mix(b, 0.0), a);
         assert_eq!(a.mix(b, 1.0), b);
         assert_eq!(a.mix(b, 0.5), Rgb::new(100, 50, 25));
+    }
+
+    #[test]
+    fn hsv_primaries() {
+        assert_eq!(Rgb::from_hsv(0.0, 1.0, 1.0), Rgb::new(255, 0, 0));
+        assert_eq!(Rgb::from_hsv(120.0, 1.0, 1.0), Rgb::new(0, 255, 0));
+        assert_eq!(Rgb::from_hsv(240.0, 1.0, 1.0), Rgb::new(0, 0, 255));
+        assert_eq!(Rgb::from_hsv(300.0, 0.0, 1.0), Rgb::new(255, 255, 255));
+        assert_eq!(Rgb::from_hsv(60.0, 1.0, 0.0), Rgb::new(0, 0, 0));
     }
 
     #[test]

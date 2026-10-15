@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
-use prism_core::effects::{render, ChannelLayout, LightingConfig};
+use prism_core::effects::{render, ChannelLayout, Layer, LightingStore, Profile};
 use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -23,7 +23,7 @@ const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const SAVE_AFTER: Duration = Duration::from_secs(1);
 
 enum Msg {
-    Config(LightingConfig),
+    Config(LightingStore),
     Stop,
 }
 
@@ -35,12 +35,12 @@ struct Status {
 pub struct Engine {
     tx: Sender<Msg>,
     thread: Mutex<Option<JoinHandle<()>>>,
-    config: Mutex<LightingConfig>,
+    config: Mutex<LightingStore>,
     connected: Arc<AtomicBool>,
 }
 
 impl Engine {
-    pub fn spawn(app: AppHandle, config: LightingConfig, layout: Vec<ChannelLayout>, save_to: Option<PathBuf>) -> Self {
+    pub fn spawn(app: AppHandle, config: LightingStore, layout: Vec<ChannelLayout>, save_to: Option<PathBuf>) -> Self {
         let (tx, rx) = mpsc::channel();
         let connected = Arc::new(AtomicBool::new(false));
         let flag = connected.clone();
@@ -126,7 +126,7 @@ impl Engine {
         Self { tx, thread: Mutex::new(Some(thread)), config: Mutex::new(config), connected }
     }
 
-    pub fn config(&self) -> LightingConfig {
+    pub fn config(&self) -> LightingStore {
         self.config.lock().unwrap().clone()
     }
 
@@ -134,7 +134,7 @@ impl Engine {
         self.connected.load(Ordering::SeqCst)
     }
 
-    pub fn set_config(&self, config: LightingConfig) {
+    pub fn set_config(&self, config: LightingStore) {
         *self.config.lock().unwrap() = config.clone();
         let _ = self.tx.send(Msg::Config(config));
     }
@@ -148,15 +148,23 @@ impl Engine {
     }
 }
 
-pub fn load(path: &Option<PathBuf>) -> LightingConfig {
-    path.as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<LightingConfig>(&s).ok())
-        .unwrap_or_default()
-        .sanitized()
+/// Reads saved lighting. Settings from before presets existed become a
+/// "My settings" preset; anything unreadable falls back to the starter presets.
+pub fn load(path: &Option<PathBuf>, layout: &[ChannelLayout]) -> LightingStore {
+    let text = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+    let Some(text) = text else { return LightingStore::starter(layout) };
+    if let Ok(store) = serde_json::from_str::<LightingStore>(&text) {
+        return store.sanitized(layout);
+    }
+    let mut store = LightingStore::starter(layout);
+    if let Ok(old) = serde_json::from_str::<Layer>(&text) {
+        let layer = Layer { name: "Main".into(), ..old };
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer] });
+    }
+    store.sanitized(layout)
 }
 
-fn save(path: &Option<PathBuf>, cfg: &LightingConfig) {
+fn save(path: &Option<PathBuf>, cfg: &LightingStore) {
     let Some(path) = path else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);

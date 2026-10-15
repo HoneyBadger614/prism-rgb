@@ -9,7 +9,23 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PRISM</div>
-    <div class="profile">Profile: Default</div>
+
+    <div class="profile-menu" id="profile-menu-wrap">
+      <button class="profile" id="profile-btn" aria-haspopup="true" aria-expanded="false">
+        <span class="profile-label">Profile</span>
+        <span class="profile-name" id="profile-name"></span>
+        <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="menu" id="profile-menu" role="menu" hidden>
+        <div class="menu-list" id="profile-list"></div>
+        <div class="menu-sep"></div>
+        <button class="menu-item" id="profile-new" role="menuitem">New profile</button>
+        <button class="menu-item" id="profile-dup" role="menuitem">Duplicate</button>
+        <button class="menu-item" id="profile-rename" role="menuitem">Rename</button>
+        <button class="menu-item danger" id="profile-delete" role="menuitem">Delete</button>
+      </div>
+    </div>
+
     <button class="btn ghost" id="rescan">Rescan devices</button>
   </header>
 
@@ -43,78 +59,155 @@
         <div class="soon" id="soon"></div>
 
         <div class="node-lighting" id="node-lighting" hidden>
-          <section class="preview" aria-label="Live preview">
-            <div class="preview-head">
-              <span class="label">Live preview</span>
-            </div>
-            <canvas id="fans" height="220"></canvas>
-            <div class="fan-labels" id="fan-labels"></div>
-            <p class="hint">Channel 2 · nothing connected</p>
-          </section>
-
-          <section class="controls" aria-label="Lighting settings">
-            <div class="field">
-              <span class="label">Effect</span>
-              <div class="seg seg-4" role="group" aria-label="Effect">
-                <button id="fx-static" data-effect="static">Static</button>
-                <button id="fx-gradient" data-effect="gradient">Gradient</button>
-                <button id="fx-wave" data-effect="wave">Wave</button>
-                <button id="fx-breathe" data-effect="breathe">Breathe</button>
-              </div>
-            </div>
-
-            <div class="field">
-              <span class="label">Colors</span>
-              <div class="color-slots" role="tablist" aria-label="Which color to edit">
-                <button class="slot" id="slot-1" data-slot="color1" role="tab">
-                  <span class="chip" id="color1-chip"></span>
-                  <span><span class="slot-name" id="slot-1-name">Color 1</span><span class="slot-hex" id="color1-hex"></span></span>
-                </button>
-                <button class="slot" id="slot-2" data-slot="color2" role="tab">
-                  <span class="chip" id="color2-chip"></span>
-                  <span><span class="slot-name">Color 2</span><span class="slot-hex" id="color2-hex"></span></span>
-                </button>
-              </div>
-
-              <div class="picker" id="picker">
-                <div class="sv" id="sv" role="slider" tabindex="0" aria-label="Shade (arrow keys adjust)">
-                  <span class="knob" id="sv-knob"></span>
+          <div class="lighting-grid">
+            <div class="left-col">
+              <!-- Preview + selection -->
+              <section class="preview" aria-label="Live preview">
+                <div class="preview-head">
+                  <span class="label">Live preview</span>
+                  <div class="master">
+                    <label class="label" for="master">Overall brightness <span class="val" id="master-val"></span></label>
+                    <input type="range" id="master" min="0" max="100" step="1">
+                  </div>
                 </div>
-                <div class="hue" id="hue" role="slider" tabindex="0" aria-label="Color (arrow keys adjust)" aria-valuemin="0" aria-valuemax="360">
-                  <span class="knob" id="hue-knob"></span>
+                <canvas id="fans"></canvas>
+                <div class="fan-labels" id="fan-labels"></div>
+
+                <div class="select-bar">
+                  <span class="label">Select LEDs</span>
+                  <div class="chips" id="select-chips"></div>
+                  <span class="sel-count" id="sel-count"></span>
                 </div>
-                <div class="hex-row">
-                  <label class="label" for="hex-input">Hex</label>
-                  <input id="hex-input" class="hex-input" maxlength="7" spellcheck="false" autocomplete="off">
+                <p class="hint">Click LEDs in the preview, or drag a box around them. Hold Shift to add more.</p>
+
+                <div class="paint-bar" id="paint-bar" hidden>
+                  <span class="label">Paint selection</span>
+                  <div class="paint-swatches" id="paint-swatches"></div>
                 </div>
+              </section>
+
+              <!-- Layers -->
+              <section class="layers" aria-label="Layers">
+                <div class="layers-head">
+                  <span class="label">Layers</span>
+                  <span class="hint">Higher layers paint over lower ones</span>
+                  <button class="btn add-effect" id="layer-add">Add effect</button>
+                </div>
+                <div class="layer-list" id="layer-list"></div>
+              </section>
+            </div>
+
+            <!-- Selected layer settings -->
+            <section class="controls" aria-label="Layer settings">
+              <div class="no-layer" id="no-layer" hidden>
+                <p>No effects yet. Add one to light up your fans.</p>
+                <button class="btn" id="no-layer-add">Add effect</button>
               </div>
 
-              <div class="presets" id="presets" role="group" aria-label="Quick colors"></div>
-            </div>
+              <div class="layer-editor" id="layer-editor">
+                <div class="editing-head">
+                  <span class="label">Editing</span>
+                  <input class="editing-input" id="layer-name" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Layer name" title="Click to rename this layer">
+                  <span class="editing-target" id="editing-target"></span>
+                </div>
 
-            <div class="field" id="field-spread">
-              <span class="label">Spread</span>
-              <div class="seg seg-2" role="group" aria-label="Spread">
-                <button id="spread-across" data-spread="across">Across fans</button>
-                <button id="spread-per-fan" data-spread="per-fan">Per fan</button>
+                <div class="field">
+                  <span class="label">Effect</span>
+                  <div class="effect-row">
+                    <span class="effect-thumb" id="effect-thumb"></span>
+                    <span class="effect-text">
+                      <span class="effect-name" id="effect-name"></span>
+                      <span class="effect-desc" id="effect-desc"></span>
+                    </span>
+                    <button class="mini" id="effect-change">Change</button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <span class="label">Applies to</span>
+                  <div class="target-row">
+                    <span class="target-desc" id="target-desc"></span>
+                    <button class="mini" id="target-sel">Use selection</button>
+                    <button class="mini" id="target-all">All LEDs</button>
+                  </div>
+                </div>
+
+                <div class="field" id="field-colors">
+                  <span class="label">Colors</span>
+                  <div class="color-slots" role="tablist" aria-label="Which color to edit">
+                    <button class="slot" id="slot-1" data-slot="color1" role="tab">
+                      <span class="chip" id="color1-chip"></span>
+                      <span><span class="slot-name" id="slot-1-name">Color 1</span><span class="slot-hex" id="color1-hex"></span></span>
+                    </button>
+                    <button class="slot" id="slot-2" data-slot="color2" role="tab">
+                      <span class="chip" id="color2-chip"></span>
+                      <span><span class="slot-name" id="slot-2-name">Color 2</span><span class="slot-hex" id="color2-hex"></span></span>
+                    </button>
+                  </div>
+
+                  <div class="picker" id="picker">
+                    <div class="sv" id="sv" role="slider" tabindex="0" aria-label="Shade (arrow keys adjust)">
+                      <span class="knob" id="sv-knob"></span>
+                    </div>
+                    <div class="hue" id="hue" role="slider" tabindex="0" aria-label="Color (arrow keys adjust)" aria-valuemin="0" aria-valuemax="360">
+                      <span class="knob" id="hue-knob"></span>
+                    </div>
+                    <div class="hex-row">
+                      <label class="label" for="hex-input">Hex</label>
+                      <input id="hex-input" class="hex-input" maxlength="7" spellcheck="false" autocomplete="off">
+                    </div>
+                  </div>
+
+                  <div class="presets" id="quick-colors" role="group" aria-label="Quick colors"></div>
+                </div>
+
+                <div class="field" id="field-spread">
+                  <span class="label">Spread</span>
+                  <div class="seg seg-2" role="group" aria-label="Spread">
+                    <button id="spread-across" data-spread="across">Across fans</button>
+                    <button id="spread-per-fan" data-spread="per-fan">Per fan</button>
+                  </div>
+                </div>
+
+                <div class="field" id="field-speed">
+                  <label class="label" for="speed">Speed <span class="val" id="speed-val"></span></label>
+                  <input type="range" id="speed" min="1" max="10" step="1">
+                </div>
+
+                <div class="field">
+                  <label class="label" for="brightness">Brightness <span class="val" id="brightness-val"></span></label>
+                  <input type="range" id="brightness" min="0" max="100" step="1">
+                </div>
               </div>
-            </div>
-
-            <div class="field">
-              <label class="label" for="brightness">Brightness <span class="val" id="brightness-val"></span></label>
-              <input type="range" id="brightness" min="0" max="100" step="1">
-            </div>
-
-            <div class="field" id="field-speed">
-              <label class="label" for="speed">Speed <span class="val" id="speed-val"></span></label>
-              <input type="range" id="speed" min="1" max="10" step="1">
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
       </div>
     </main>
   </div>
 
+  <!-- Effect picker -->
+  <div class="overlay" id="fx-overlay" hidden>
+    <div class="fx-dialog" role="dialog" aria-modal="true" aria-labelledby="fx-title">
+      <div class="fx-head">
+        <div>
+          <h2 id="fx-title">Add effect</h2>
+          <p class="hint" id="fx-sub"></p>
+        </div>
+        <button class="icon-btn" id="fx-close" aria-label="Close">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <span class="label">Effects</span>
+      <div class="fx-grid" id="fx-effects"></div>
+      <div class="fx-combos" id="fx-combos-wrap">
+        <span class="label">Combos</span>
+        <div class="fx-grid" id="fx-combos"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="lighting.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

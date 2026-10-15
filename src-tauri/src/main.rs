@@ -4,7 +4,7 @@ mod engine;
 
 use engine::Engine;
 use hidapi::HidApi;
-use prism_core::effects::{ChannelLayout, LightingConfig};
+use prism_core::effects::{ChannelLayout, LightingStore};
 use prism_core::{find_devices, DeviceKind, CORSAIR_VID};
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
@@ -59,7 +59,7 @@ struct AppState {
 
 #[derive(Serialize)]
 struct LightingState {
-    config: LightingConfig,
+    store: LightingStore,
     layout: Vec<ChannelLayout>,
     connected: bool,
 }
@@ -67,18 +67,19 @@ struct LightingState {
 #[tauri::command]
 fn get_lighting(state: State<AppState>) -> LightingState {
     LightingState {
-        config: state.engine.config(),
+        store: state.engine.config(),
         layout: state.layout.clone(),
         connected: state.engine.is_connected(),
     }
 }
 
-/// Applies new lighting settings. Returns them with any out-of-range numbers fixed.
+/// Applies new lighting settings (all presets). Returns them with anything
+/// out of range fixed.
 #[tauri::command]
-fn set_lighting(state: State<AppState>, config: LightingConfig) -> LightingConfig {
-    let config = config.sanitized();
-    state.engine.set_config(config.clone());
-    config
+fn set_lighting(state: State<AppState>, store: LightingStore) -> LightingStore {
+    let store = store.sanitized(&state.layout);
+    state.engine.set_config(store.clone());
+    store
 }
 
 fn main() {
@@ -93,8 +94,8 @@ fn main() {
         .setup(|app| {
             // ~/.config/io.github.honeybadger.prism/lighting.json
             let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
-            let config = engine::load(&save_to);
             let layout = node_layout();
+            let config = engine::load(&save_to, &layout);
             let engine = Engine::spawn(app.handle().clone(), config, layout.clone(), save_to);
             app.manage(AppState { engine, layout });
             Ok(())

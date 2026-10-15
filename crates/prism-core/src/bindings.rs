@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_BINDINGS: usize = 200;
 pub const MAX_COMBO_KEYS: usize = 6;
+pub const MAX_MACRO_STEPS: usize = 500;
+/// Longest single wait in a macro.
+pub const MAX_WAIT_MS: u32 = 10_000;
 /// Highest key code Linux uses.
 pub const MAX_CODE: u16 = 0x2ff;
 /// The left mouse button can never be bound, so clicking always works.
@@ -30,8 +33,29 @@ pub enum ActionDef {
     Launch { app: String },
     /// Changes the mouse's DPI.
     Dpi { op: DpiOp },
+    /// Plays a sequence of key presses, releases and waits.
+    Macro { steps: Vec<MacroStep>, mode: PlayMode },
     /// Does nothing.
     Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MacroStep {
+    Down { key: u16 },
+    Up { key: u16 },
+    Wait { ms: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayMode {
+    /// Plays once per press.
+    Once,
+    /// Plays over and over while the button is held.
+    Repeat,
+    /// One press starts it repeating, the next press stops it.
+    Toggle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +128,21 @@ impl ActionDef {
             }
             ActionDef::Launch { app } => valid_app_id(&app).then_some(ActionDef::Launch { app })?,
             ActionDef::Dpi { op } => ActionDef::Dpi { op },
+            ActionDef::Macro { steps, mode } => {
+                let steps: Vec<MacroStep> = steps
+                    .into_iter()
+                    .filter_map(|s| match s {
+                        MacroStep::Down { key } | MacroStep::Up { key } if !ok(&key) => None,
+                        MacroStep::Wait { ms } => Some(MacroStep::Wait { ms: ms.min(MAX_WAIT_MS) }),
+                        s => Some(s),
+                    })
+                    .take(MAX_MACRO_STEPS)
+                    .collect();
+                if !steps.iter().any(|s| !matches!(s, MacroStep::Wait { .. })) {
+                    return None; // nothing but waits
+                }
+                ActionDef::Macro { steps, mode }
+            }
             ActionDef::Disabled => ActionDef::Disabled,
         })
     }
@@ -229,6 +268,25 @@ mod tests {
         assert_eq!((d.stages, d.sniper, d.start), ([100, 1650, 18000], 100, 3));
         let j = r#"{"device":"mouse","input":754,"action":{"kind":"dpi","op":"sniper"}}"#;
         assert_eq!(serde_json::from_str::<BindingDef>(j).unwrap().action, ActionDef::Dpi { op: DpiOp::Sniper });
+    }
+
+    #[test]
+    fn macros_sanitize() {
+        use MacroStep::*;
+        let m = ActionDef::Macro {
+            steps: vec![Down { key: 30 }, Wait { ms: 99_999 }, Up { key: 30 }, Down { key: 0 }],
+            mode: PlayMode::Once,
+        };
+        assert_eq!(
+            m.sanitized(),
+            Some(ActionDef::Macro { steps: vec![Down { key: 30 }, Wait { ms: MAX_WAIT_MS }, Up { key: 30 }], mode: PlayMode::Once })
+        );
+        let only_waits = ActionDef::Macro { steps: vec![Wait { ms: 5 }], mode: PlayMode::Toggle };
+        assert_eq!(only_waits.sanitized(), None);
+        let big = ActionDef::Macro { steps: vec![Down { key: 30 }; 900], mode: PlayMode::Repeat };
+        assert!(matches!(big.sanitized(), Some(ActionDef::Macro { steps, .. }) if steps.len() == MAX_MACRO_STEPS));
+        let j = r#"{"kind":"macro","mode":"repeat","steps":[{"kind":"down","key":30},{"kind":"wait","ms":20},{"kind":"up","key":30}]}"#;
+        assert!(matches!(serde_json::from_str::<ActionDef>(j).unwrap(), ActionDef::Macro { mode: PlayMode::Repeat, .. }));
     }
 
     #[test]

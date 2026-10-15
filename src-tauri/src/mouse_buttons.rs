@@ -54,19 +54,19 @@ impl ButtonListener {
                 };
                 let Some(now) = (n > 0).then(|| buttons_held(&buf[..n])).flatten() else { continue };
                 let now: HashSet<&'static str> = now.into_iter().collect();
-                for (name, action) in &bindings {
+                for (i, (name, action)) in bindings.iter().enumerate() {
                     match (held.contains(name), now.contains(name)) {
-                        (false, true) => sender.act(action, true),
-                        (true, false) => sender.act(action, false),
+                        (false, true) => sender.act(i as u16, action, true),
+                        (true, false) => sender.act(i as u16, action, false),
                         _ => {}
                     }
                 }
                 held = now;
             }
             // Let go of anything still held, so no key is left stuck down.
-            for (name, action) in &bindings {
+            for (i, (name, action)) in bindings.iter().enumerate() {
                 if held.contains(name) {
-                    sender.act(action, false);
+                    sender.act(i as u16, action, false);
                 }
             }
         });

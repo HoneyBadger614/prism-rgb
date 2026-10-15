@@ -43,6 +43,11 @@ const Bindings = (() => {
       case "combo": return action.keys.map((k) => MODIFIERS.find(([c]) => c === k)?.[1] || nameOf(k)).join(" + ");
       case "launch": return `Opens ${apps?.find((a) => a.id === action.app)?.name || action.app}`;
       case "dpi": return DPI_OPS[action.op];
+      case "macro": {
+        const n = action.steps.filter((s) => s.kind === "down").length;
+        const how = { once: "once", repeat: "while held", toggle: "on/off" }[action.mode];
+        return `Macro: ${n} key${n === 1 ? "" : "s"}, ${how}`;
+      }
       case "disabled": return "Does nothing";
     }
     return "";
@@ -224,6 +229,8 @@ const Bindings = (() => {
     $("bind-media-panel").hidden = kind !== "media";
     $("bind-app-panel").hidden = kind !== "launch";
     $("bind-dpi-panel").hidden = kind !== "dpi";
+    $("bind-macro-panel").hidden = kind !== "macro";
+    if (kind === "macro") renderMacro(b.action);
     if (kind === "dpi") {
       document.querySelectorAll("[data-op]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.op === b.action.op)));
       $("bind-dpi-note").textContent = Lighting.profile().dpi.enabled
@@ -288,6 +295,7 @@ const Bindings = (() => {
       case "key": return setBinding({ kind: "key", key: current?.kind === "key" ? current.key : picked === 58 ? 1 : 30 });
       case "combo": return setBinding({ kind: "combo", keys: [29, 31] });
       case "dpi": return setBinding({ kind: "dpi", op: picked === 0x2f2 ? "sniper" : picked === 0x2f1 ? "down" : "up" });
+      case "macro": return setBinding({ kind: "macro", mode: "once", steps: [] });
       case "launch":
         // Nothing saved until an app is chosen; just show the list.
         renderAppsOnly();
@@ -298,7 +306,7 @@ const Bindings = (() => {
   // Show the app list without saving a binding yet.
   function renderAppsOnly() {
     document.querySelectorAll("[data-kind]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.kind === "launch")));
-    ["bind-key-panel", "bind-combo-panel", "bind-media-panel", "bind-dpi-panel"].forEach((id) => ($(id).hidden = true));
+    ["bind-key-panel", "bind-combo-panel", "bind-media-panel", "bind-dpi-panel", "bind-macro-panel"].forEach((id) => ($(id).hidden = true));
     $("bind-disabled-note").hidden = true;
     $("bind-app-panel").hidden = false;
     renderApps(null);
@@ -329,6 +337,94 @@ const Bindings = (() => {
       row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(b.input); } });
       return row;
     }) : [el("p", "hint", `No bindings on this ${dev} yet. Everything works as normal.`)]));
+  }
+
+  /* ---------- macros ---------- */
+
+  let recording = null; // { started, timer } while recording
+
+  function renderMacro(action) {
+    document.querySelectorAll("[data-mode]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.mode === action.mode)));
+    const steps = action.steps;
+    const icon = (svg) => {
+      const b = el("button", "icon-btn");
+      b.innerHTML = svg;
+      return b;
+    };
+    $("macro-steps").replaceChildren(...(steps.length ? steps.map((s, i) => {
+      const row = el("div", "mstep" + (s.kind === "wait" ? " wait" : ""));
+      const what = el("span", "what");
+      if (s.kind === "wait") {
+        const ms = el("input", "text-input");
+        ms.type = "number";
+        ms.min = "0";
+        ms.max = "10000";
+        ms.value = String(s.ms);
+        ms.setAttribute("aria-label", "Wait in milliseconds");
+        ms.addEventListener("change", () => {
+          s.ms = Math.max(0, Math.min(10000, Number(ms.value) || 0));
+          setBinding(action);
+        });
+        what.append(el("span", "tag", "Wait"), ms, el("span", "hint", "ms"));
+      } else {
+        what.append(el("span", "tag", s.kind === "down" ? "Press" : "Release"), el("span", null, nameOf(s.key)));
+      }
+      const up = icon('<svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>');
+      up.title = "Move up";
+      up.disabled = i === 0;
+      up.addEventListener("click", () => { [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; setBinding(action); });
+      const down = icon('<svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>');
+      down.title = "Move down";
+      down.disabled = i === steps.length - 1;
+      down.addEventListener("click", () => { [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; setBinding(action); });
+      const del = icon('<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>');
+      del.title = "Delete step";
+      del.addEventListener("click", () => { steps.splice(i, 1); setBinding(action); });
+      [up, down, del].forEach((b) => b.setAttribute("aria-label", b.title));
+      row.append(what, up, down, del);
+      return row;
+    }) : [el("p", "hint", "No steps yet. Press Record, or add key taps and waits below.")]));
+
+    keyOptions($("macro-key"), null);
+    const keys = steps.filter((s) => s.kind === "down").length;
+    const ms = steps.reduce((t, s) => t + (s.kind === "wait" ? s.ms : 0), 0);
+    $("macro-summary").textContent = steps.length ? `${steps.length} steps · ${keys} key presses · about ${(ms / 1000).toFixed(1)} s` : "";
+    $("macro-rec").classList.toggle("on", !!recording);
+    $("macro-rec").textContent = recording ? "Stop" : "Record";
+  }
+
+  function currentMacro() {
+    const a = find(picked)?.action;
+    return a && a.kind === "macro" ? a : null;
+  }
+
+  async function toggleRecording() {
+    if (recording) return stopRecording();
+    await invoke("macro_record_start");
+    recording = { started: Date.now() };
+    recording.timer = setInterval(() => {
+      const s = Math.floor((Date.now() - recording.started) / 1000);
+      $("macro-rec-msg").textContent = `Recording… ${s}s. Press your keys, then Stop.`;
+      if (s >= 60) stopRecording();
+    }, 250);
+    $("macro-rec-msg").textContent = "Recording… press your keys, then Stop.";
+    renderEditor();
+  }
+
+  async function stopRecording() {
+    if (!recording) return;
+    clearInterval(recording.timer);
+    recording = null;
+    const steps = await invoke("macro_record_stop");
+    $("macro-rec-msg").textContent = steps.length ? `Recorded ${steps.length} steps.` : "Nothing was recorded.";
+    const m = currentMacro();
+    if (m && steps.length) {
+      m.steps = steps;
+      setBinding(m);
+      fetchNames();
+    } else {
+      renderEditor();
+    }
   }
 
   /* ---------- DPI ---------- */
@@ -401,6 +497,31 @@ const Bindings = (() => {
     Lighting.onChange(() => { if (!$("bindings-view").hidden) render(); });
 
     document.querySelectorAll("[data-op]").forEach((x) => x.addEventListener("click", () => setBinding({ kind: "dpi", op: x.dataset.op })));
+
+    document.querySelectorAll("#macro-modes [data-mode]").forEach((x) => x.addEventListener("click", () => {
+      const m = currentMacro();
+      if (m) setBinding({ ...m, mode: x.dataset.mode });
+    }));
+    $("macro-rec").addEventListener("click", toggleRecording);
+    $("macro-add-tap").addEventListener("click", () => {
+      const m = currentMacro();
+      const key = Number($("macro-key").value);
+      if (!m || !key) return;
+      m.steps.push({ kind: "down", key }, { kind: "wait", ms: 20 }, { kind: "up", key });
+      setBinding(m);
+    });
+    $("macro-add-wait").addEventListener("click", () => {
+      const m = currentMacro();
+      if (!m) return;
+      m.steps.push({ kind: "wait", ms: 100 });
+      setBinding(m);
+    });
+    $("macro-no-waits").addEventListener("click", () => {
+      const m = currentMacro();
+      if (!m) return;
+      m.steps = m.steps.filter((s) => s.kind !== "wait");
+      setBinding(m);
+    });
     $("dpi-on").addEventListener("change", (e) => editDpi({ enabled: e.target.checked }));
     // Sliders show the number while dragging and send it to the mouse on release.
     const live = (id) => $(id).addEventListener("input", (e) => {

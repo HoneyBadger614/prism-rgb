@@ -159,6 +159,7 @@
                     <button data-kind="media">Media</button>
                     <button data-kind="launch">Open an app</button>
                     <button data-kind="dpi">Change DPI</button>
+                    <button data-kind="macro">Play a macro</button>
                     <button data-kind="disabled">Do nothing</button>
                   </div>
                 </div>
@@ -196,6 +197,27 @@
                     <button data-op="sniper">Sniper (hold)</button>
                   </div>
                   <p class="hint" id="bind-dpi-note"></p>
+                </div>
+
+                <div class="field" id="bind-macro-panel" hidden>
+                  <span class="label">Plays</span>
+                  <div class="seg seg-3" id="macro-modes" role="group" aria-label="How the macro plays">
+                    <button data-mode="once">Once</button>
+                    <button data-mode="repeat">While held</button>
+                    <button data-mode="toggle">Toggle</button>
+                  </div>
+                  <div class="macro-rec">
+                    <button class="btn rec" id="macro-rec">Record</button>
+                    <span class="hint" id="macro-rec-msg">Records keys and mouse buttons (not left click) until you press Stop.</span>
+                  </div>
+                  <div class="macro-steps" id="macro-steps"></div>
+                  <div class="macro-add">
+                    <select class="text-input" id="macro-key" aria-label="Key to add"></select>
+                    <button class="mini" id="macro-add-tap">Add key tap</button>
+                    <button class="mini" id="macro-add-wait">Add wait</button>
+                    <button class="mini" id="macro-no-waits">Remove all waits</button>
+                  </div>
+                  <p class="hint" id="macro-summary"></p>
                 </div>
 
                 <p class="hint" id="bind-disabled-note" hidden>This key or button won't do anything while bindings are on.</p>

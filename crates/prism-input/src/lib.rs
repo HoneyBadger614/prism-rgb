@@ -14,7 +14,7 @@
 //! Privacy: only Corsair devices are opened, and nothing read here is stored
 //! or sent anywhere. Events go straight back out through the virtual device.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,12 +74,33 @@ pub enum Action {
     Combo(Vec<u16>),
     /// Opens an installed app by its desktop id, using `gtk-launch`.
     Launch(String),
+    /// Plays a macro.
+    Macro { steps: Arc<Vec<Step>>, mode: Mode },
     /// Tells the app something happened (press and release), for actions
     /// it handles itself, like changing the mouse's DPI. The number says
     /// which action.
     Notify(u32),
     /// Does nothing.
     Disabled,
+}
+
+/// One step of a macro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Down(u16),
+    Up(u16),
+    /// Milliseconds.
+    Wait(u32),
+}
+
+/// How a macro plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Once,
+    /// Over and over while held.
+    Repeat,
+    /// Press to start repeating, press again to stop.
+    Toggle,
 }
 
 /// Called with (action number, pressed) for [`Action::Notify`].
@@ -96,7 +117,104 @@ impl Action {
         match self {
             Action::Key(k) => vec![*k],
             Action::Combo(ks) => ks.clone(),
+            Action::Macro { steps, .. } => steps
+                .iter()
+                .filter_map(|s| match s {
+                    Step::Down(k) | Step::Up(k) => Some(*k),
+                    Step::Wait(_) => None,
+                })
+                .collect(),
             Action::Launch(_) | Action::Notify(_) | Action::Disabled => vec![],
+        }
+    }
+}
+
+/// Plays macros through a shared virtual device, each on its own thread so
+/// waits don't hold anything else up.
+struct Macros {
+    out: Arc<Mutex<VirtualDevice>>,
+    /// Per bound key: (playing, asked to stop).
+    players: HashMap<u16, (Arc<AtomicBool>, Arc<AtomicBool>)>,
+}
+
+impl Macros {
+    fn new(out: Arc<Mutex<VirtualDevice>>) -> Self {
+        Self { out, players: HashMap::new() }
+    }
+
+    /// Reacts to the bound key `id` being pressed or let go.
+    fn handle(&mut self, id: u16, steps: &Arc<Vec<Step>>, mode: Mode, value: i32) {
+        let (playing, stop) = self
+            .players
+            .entry(id)
+            .or_insert_with(|| (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false))))
+            .clone();
+        let is_playing = playing.load(Ordering::SeqCst);
+        match (mode, value) {
+            (Mode::Once, PRESSED) if !is_playing => self.play(steps, false, playing, stop),
+            (Mode::Repeat, PRESSED) if !is_playing => self.play(steps, true, playing, stop),
+            (Mode::Repeat, RELEASED) => stop.store(true, Ordering::SeqCst),
+            (Mode::Toggle, PRESSED) if is_playing => stop.store(true, Ordering::SeqCst),
+            (Mode::Toggle, PRESSED) => self.play(steps, true, playing, stop),
+            _ => {}
+        }
+    }
+
+    fn play(&self, steps: &Arc<Vec<Step>>, looping: bool, playing: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
+        playing.store(true, Ordering::SeqCst);
+        stop.store(false, Ordering::SeqCst);
+        let (steps, out) = (steps.clone(), self.out.clone());
+        std::thread::spawn(move || {
+            let send = |code: u16, v: i32| {
+                if let Ok(mut o) = out.lock() {
+                    let _ = o.emit(&[InputEvent::new(EventType::KEY, code, v)]);
+                }
+            };
+            let mut held: HashSet<u16> = HashSet::new();
+            'outer: loop {
+                for s in steps.iter() {
+                    if stop.load(Ordering::SeqCst) {
+                        break 'outer;
+                    }
+                    match *s {
+                        Step::Down(k) => {
+                            send(k, PRESSED);
+                            held.insert(k);
+                        }
+                        Step::Up(k) => {
+                            send(k, RELEASED);
+                            held.remove(&k);
+                        }
+                        Step::Wait(ms) => {
+                            // in small slices, so stopping is quick
+                            let end = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+                            while std::time::Instant::now() < end {
+                                if stop.load(Ordering::SeqCst) {
+                                    break 'outer;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(5).min(end - std::time::Instant::now()));
+                            }
+                        }
+                    }
+                }
+                if !looping || stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                // a short breath between repeats, so a macro with no waits
+                // can't flood the computer
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // Never leave a key stuck down.
+            for k in held {
+                send(k, RELEASED);
+            }
+            playing.store(false, Ordering::SeqCst);
+        });
+    }
+
+    fn stop_all(&self) {
+        for (_, stop) in self.players.values() {
+            stop.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -142,7 +260,7 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
     match bindings.get(&code) {
         None => vec![(code, value)],
         Some(Action::Key(k)) => vec![(*k, value)],
-        Some(Action::Disabled) | Some(Action::Launch(_)) | Some(Action::Notify(_)) => vec![],
+        Some(Action::Disabled) | Some(Action::Launch(_)) | Some(Action::Notify(_)) | Some(Action::Macro { .. }) => vec![],
         Some(Action::Combo(keys)) => match value {
             PRESSED => keys.iter().map(|&k| (k, PRESSED)).collect(),
             RELEASED => keys.iter().rev().map(|&k| (k, RELEASED)).collect(),
@@ -155,8 +273,9 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
 /// (like Nightsword buttons reported on its own channel), through its own
 /// virtual device.
 pub struct ActionSender {
-    out: VirtualDevice,
+    out: Arc<Mutex<VirtualDevice>>,
     notifier: Option<Notifier>,
+    macros: Macros,
 }
 
 impl ActionSender {
@@ -168,12 +287,17 @@ impl ActionSender {
         if keys.iter().next().is_none() {
             keys.insert(Key::KEY_UNKNOWN);
         }
-        let out = VirtualDeviceBuilder::new()?.name(VIRTUAL_NAME).with_keys(&keys)?.build()?;
-        Ok(Self { out, notifier })
+        let out = Arc::new(Mutex::new(VirtualDeviceBuilder::new()?.name(VIRTUAL_NAME).with_keys(&keys)?.build()?));
+        Ok(Self { macros: Macros::new(out.clone()), out, notifier })
     }
 
-    /// Sends what `action` does when its button is pressed (`down`) or let go.
-    pub fn act(&mut self, action: &Action, down: bool) {
+    /// Sends what `action` does when its button is pressed (`down`) or let
+    /// go. `id` tells buttons apart (for macros that keep playing).
+    pub fn act(&mut self, id: u16, action: &Action, down: bool) {
+        if let Action::Macro { steps, mode } = action {
+            self.macros.handle(id, steps, *mode, if down { PRESSED } else { RELEASED });
+            return;
+        }
         if let (Action::Launch(app), true) = (action, down) {
             launch(app);
         }
@@ -186,8 +310,16 @@ impl ActionSender {
             .map(|(code, v)| InputEvent::new(EventType::KEY, code, v))
             .collect();
         if !events.is_empty() {
-            let _ = self.out.emit(&events);
+            if let Ok(mut o) = self.out.lock() {
+                let _ = o.emit(&events);
+            }
         }
+    }
+}
+
+impl Drop for ActionSender {
+    fn drop(&mut self) {
+        self.macros.stop_all();
     }
 }
 
@@ -281,6 +413,7 @@ fn pump(
     notifier: Option<Notifier>,
 ) {
     let fd = dev.as_raw_fd();
+    let mut macros = Macros::new(out.clone());
     while !stop.load(Ordering::SeqCst) {
         // Wait up to 100 ms for input so we notice `stop` promptly.
         if !readable(fd, 100) {
@@ -295,6 +428,9 @@ fn pump(
                         launch(app);
                     }
                     notify(&notifier, bindings.get(&ev.code()), ev.value());
+                    if let Some(Action::Macro { steps, mode }) = bindings.get(&ev.code()) {
+                        macros.handle(ev.code(), steps, *mode, ev.value());
+                    }
                     for (code, value) in translate(ev.code(), ev.value(), &bindings) {
                         batch.push(InputEvent::new(EventType::KEY, code, value));
                     }
@@ -309,7 +445,64 @@ fn pump(
             }
         }
     }
+    macros.stop_all();
     let _ = dev.ungrab();
+}
+
+/// Records key and button presses from the Corsair devices into macro steps,
+/// with the time between them. Nothing is taken over, and the left mouse
+/// button is never recorded (so clicking Stop doesn't end up in the macro).
+pub struct Recorder {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<Vec<Step>>>,
+}
+
+pub const MAX_RECORDED_STEPS: usize = 500;
+
+impl Recorder {
+    /// Starts recording; stops by itself after `max` or 500 steps.
+    pub fn start(max: std::time::Duration) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut devs: Vec<Device> =
+                corsair_devices().into_iter().filter(|d| d.has_keys()).map(|d| d.device).collect();
+            let started = std::time::Instant::now();
+            let mut last: Option<std::time::Instant> = None;
+            let mut steps: Vec<Step> = Vec::new();
+            while !flag.load(Ordering::SeqCst) && started.elapsed() < max && steps.len() < MAX_RECORDED_STEPS {
+                for d in &mut devs {
+                    if !readable(d.as_raw_fd(), 10) {
+                        continue;
+                    }
+                    let Ok(events) = d.fetch_events() else { continue };
+                    for ev in events {
+                        if ev.event_type() != EventType::KEY || ev.code() == 0x110 || ev.value() > PRESSED {
+                            continue; // not a key, the left button, or a key repeat
+                        }
+                        let now = std::time::Instant::now();
+                        if let Some(prev) = last {
+                            let ms = now.duration_since(prev).as_millis().min(10_000) as u32;
+                            if ms > 0 {
+                                steps.push(Step::Wait(ms));
+                            }
+                        }
+                        last = Some(now);
+                        steps.push(if ev.value() == PRESSED { Step::Down(ev.code()) } else { Step::Up(ev.code()) });
+                    }
+                }
+            }
+            steps.truncate(MAX_RECORDED_STEPS);
+            steps
+        });
+        Self { stop, thread: Some(thread) }
+    }
+
+    /// Stops and returns what was recorded.
+    pub fn stop(mut self) -> Vec<Step> {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.take().and_then(|t| t.join().ok()).unwrap_or_default()
+    }
 }
 
 #[repr(C)]

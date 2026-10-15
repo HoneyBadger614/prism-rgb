@@ -151,6 +151,25 @@ fn list_apps() -> Vec<apps::App> {
     apps::list()
 }
 
+/// Starts recording a macro from the Corsair keyboard and mouse. Bindings
+/// pause until recording stops (or a minute passes).
+#[tauri::command]
+fn macro_record_start(state: State<AppState>) {
+    state.remap.record_start();
+}
+
+/// Stops recording and returns the recorded steps.
+#[tauri::command]
+async fn macro_record_stop(app: tauri::AppHandle) -> Vec<bindings::MacroStep> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let store = state.engine.config();
+        state.remap.record_stop(&store, &state.engine)
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Writes a screen-side error to Prism's own log (stderr), for debugging.
 /// Nothing leaves the computer.
 #[tauri::command]
@@ -201,6 +220,8 @@ fn main() {
             key_names,
             list_apps,
             bindings_status,
+            macro_record_start,
+            macro_record_stop,
             ui_log
         ])
         .build(tauri::generate_context!())

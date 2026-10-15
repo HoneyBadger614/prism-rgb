@@ -1,13 +1,13 @@
 //! Keeps the input layer's remapping in step with the active profile's
 //! bindings.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use prism_core::bindings::{ActionDef, BindingDef, InputDevice};
+use prism_core::bindings::{ActionDef, BindingDef, InputDevice, MacroStep, PlayMode};
 use prism_core::effects::LightingStore;
 use prism_core::{k65_mini, nightsword};
-use prism_input::{capture_press, Action, Binding, Remapper};
+use prism_input::{capture_press, Action, Binding, Mode, Recorder, Remapper, Step};
 
 use crate::engine::{dpi_op_id, Engine};
 use crate::mouse_buttons::ButtonListener;
@@ -25,6 +25,23 @@ fn action(a: &ActionDef) -> Action {
         ActionDef::Combo { keys } => Action::Combo(keys.clone()),
         ActionDef::Launch { app } => Action::Launch(app.clone()),
         ActionDef::Dpi { op } => Action::Notify(dpi_op_id(*op)),
+        ActionDef::Macro { steps, mode } => Action::Macro {
+            steps: Arc::new(
+                steps
+                    .iter()
+                    .map(|s| match *s {
+                        MacroStep::Down { key } => Step::Down(key),
+                        MacroStep::Up { key } => Step::Up(key),
+                        MacroStep::Wait { ms } => Step::Wait(ms),
+                    })
+                    .collect(),
+            ),
+            mode: match mode {
+                PlayMode::Once => Mode::Once,
+                PlayMode::Repeat => Mode::Repeat,
+                PlayMode::Toggle => Mode::Toggle,
+            },
+        },
         ActionDef::Disabled => Action::Disabled,
     }
 }
@@ -41,6 +58,7 @@ struct Inner {
     applied: Option<(bool, Vec<BindingDef>)>,
     remapper: Option<Remapper>,
     buttons: Option<ButtonListener>,
+    recorder: Option<Recorder>,
     error: Option<String>,
 }
 
@@ -105,6 +123,38 @@ impl Remap {
         code
     }
 
+    /// Pauses bindings (so keys are recorded as they really are) and starts
+    /// recording a macro. Stops by itself after a minute.
+    pub fn record_start(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if let Some(r) = g.remapper.take() {
+            r.stop();
+        }
+        if let Some(b) = g.buttons.take() {
+            b.stop();
+        }
+        g.applied = None;
+        if let Some(old) = g.recorder.take() {
+            old.stop();
+        }
+        g.recorder = Some(Recorder::start(Duration::from_secs(60)));
+    }
+
+    /// Stops recording, turns bindings back on, and returns the macro.
+    pub fn record_stop(&self, store: &LightingStore, engine: &Engine) -> Vec<MacroStep> {
+        let recorder = self.inner.lock().unwrap().recorder.take();
+        let steps = recorder.map(Recorder::stop).unwrap_or_default();
+        self.apply(store, engine);
+        steps
+            .into_iter()
+            .map(|s| match s {
+                Step::Down(key) => MacroStep::Down { key },
+                Step::Up(key) => MacroStep::Up { key },
+                Step::Wait(ms) => MacroStep::Wait { ms },
+            })
+            .collect()
+    }
+
     pub fn error(&self) -> Option<String> {
         self.inner.lock().unwrap().error.clone()
     }
@@ -116,6 +166,9 @@ impl Remap {
         }
         if let Some(b) = g.buttons.take() {
             b.stop();
+        }
+        if let Some(r) = g.recorder.take() {
+            r.stop();
         }
     }
 }

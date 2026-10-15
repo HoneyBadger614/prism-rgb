@@ -406,5 +406,26 @@ select.text-input { width: 100%; }
 .dpi-grid .field:last-child { grid-column: 1 / -1; }
 .dpi-card.off .dpi-grid { opacity: .45; pointer-events: none; }
 #dpi-now { color: var(--accent); font-family: var(--font-mono); }
+.macro-rec { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn.rec { background: var(--raised); color: var(--text); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 8px; }
+.btn.rec::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #ff3b5c; }
+.btn.rec.on { border-color: #ff3b5c; box-shadow: 0 0 16px -4px #ff3b5c; }
+.btn.rec.on::before { border-radius: 2px; animation: rec-blink 1s steps(1) infinite; }
+@keyframes rec-blink { 50% { opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { .btn.rec.on::before { animation: none; } }
+.macro-steps { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.mstep { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; }
+.mstep .what { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.mstep .tag { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); width: 54px; flex: none; }
+.mstep.wait .tag { color: var(--accent); }
+.mstep input { width: 76px; padding: 3px 6px; font-size: 12px; }
+.macro-add { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.macro-add select { grid-column: 1 / -1; }
 .bind-row-arrow { color: var(--accent); font-family: var(--font-mono); }
 .editing-name { font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1.1; }
+/* dark scrollbars everywhere */
+* { scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }

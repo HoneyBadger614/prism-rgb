@@ -45,7 +45,7 @@ button { font: inherit; }
   padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--bg);
 }
 .brand { font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .08em; display: flex; align-items: center; gap: 10px; }
-.brand-mark { width: 16px; height: 16px; border-radius: 4px; background: linear-gradient(135deg, var(--primary), var(--accent)); transform: rotate(45deg); }
+.brand-mark { width: 46px; height: 32px; flex: none; filter: drop-shadow(0 0 6px rgba(255, 45, 149, .35)); }
 .profile { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
 
 .btn {

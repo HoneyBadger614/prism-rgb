@@ -8,7 +8,24 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PRISM</div>
+    <div class="brand">
+      <!-- the app icon, without its dark tile -->
+      <svg class="brand-mark" viewBox="80 220 880 600" aria-hidden="true">
+        <defs>
+          <linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7C3AED"/>
+            <stop offset="1" stop-color="#FF2D95"/>
+          </linearGradient>
+        </defs>
+        <path d="M100 590 L362 520" stroke="#F3E9F2" stroke-width="34" stroke-linecap="round"/>
+        <path d="M362 520 L662 520" stroke="#F3E9F2" stroke-width="20" opacity=".35"/>
+        <path d="M662 520 L930 420" stroke="#7C3AED" stroke-width="34" stroke-linecap="round"/>
+        <path d="M662 520 L940 530" stroke="#B44BF0" stroke-width="34" stroke-linecap="round"/>
+        <path d="M662 520 L930 640" stroke="#FF2D95" stroke-width="34" stroke-linecap="round"/>
+        <path d="M512 260 L812 780 L212 780 Z" fill="none" stroke="url(#brand-g)" stroke-width="64" stroke-linejoin="round"/>
+      </svg>
+      PRISM
+    </div>
 
     <div class="profile-menu" id="profile-menu-wrap">
       <button class="profile" id="profile-btn" aria-haspopup="true" aria-expanded="false">

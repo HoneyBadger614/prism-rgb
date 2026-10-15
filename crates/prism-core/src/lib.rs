@@ -1,11 +1,45 @@
 //! Prism's device layer.
 //!
-//! For now this only *finds* Corsair devices. It never opens them or sends
-//! them anything, so it is safe to run at any time.
+//! [`find_devices`] only *finds* Corsair devices; it never opens them or sends
+//! them anything. Each device module (e.g. [`lighting_node`]) handles talking
+//! to one model.
 
 use std::collections::BTreeMap;
 
 use hidapi::HidApi;
+
+pub mod lighting_node;
+
+/// A color, 0–255 per part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
+    /// Reads "#ff2d95" or "ff2d95".
+    pub fn from_hex(s: &str) -> Option<Self> {
+        let s = s.strip_prefix('#').unwrap_or(s);
+        if s.len() != 6 || !s.is_ascii() {
+            return None;
+        }
+        let part = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+        Some(Self::new(part(0)?, part(2)?, part(4)?))
+    }
+
+    /// Blends towards `other`; `t` = 0 gives self, 1 gives other.
+    pub fn mix(self, other: Rgb, t: f32) -> Rgb {
+        let t = t.clamp(0.0, 1.0);
+        let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+        Rgb::new(f(self.r, other.r), f(self.g, other.g), f(self.b, other.b))
+    }
+}
 
 /// Corsair's USB vendor ID. Every Corsair device reports this number.
 pub const CORSAIR_VID: u16 = 0x1b1c;
@@ -114,6 +148,24 @@ mod tests {
         assert_eq!(lookup_model(0x1b5c).unwrap().kind, DeviceKind::Mouse);
         assert_eq!(lookup_model(0x0c0b).unwrap().kind, DeviceKind::LightingController);
         assert!(lookup_model(0x0000).is_none());
+    }
+
+    #[test]
+    fn parses_hex_colors() {
+        assert_eq!(Rgb::from_hex("#FF2D95"), Some(Rgb::new(0xff, 0x2d, 0x95)));
+        assert_eq!(Rgb::from_hex("7c3aed"), Some(Rgb::new(0x7c, 0x3a, 0xed)));
+        assert_eq!(Rgb::from_hex("#fff"), None);
+        assert_eq!(Rgb::from_hex("zzzzzz"), None);
+        assert_eq!(Rgb::from_hex("ééé"), None);
+    }
+
+    #[test]
+    fn mixes_colors() {
+        let a = Rgb::new(0, 0, 0);
+        let b = Rgb::new(200, 100, 50);
+        assert_eq!(a.mix(b, 0.0), a);
+        assert_eq!(a.mix(b, 1.0), b);
+        assert_eq!(a.mix(b, 0.5), Rgb::new(100, 50, 25));
     }
 
     #[test]

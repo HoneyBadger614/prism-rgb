@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
+use prism_core::bindings::{DpiOp, DpiSettings};
 use prism_core::effects::{render_layers, Layer, LightingStore, Profile, Surface};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
@@ -29,7 +30,37 @@ enum Msg {
     Config(LightingStore),
     /// Which mouse buttons should report to the computer (for bindings).
     MouseReporting(Vec<&'static str>),
+    /// A DPI binding was pressed (true) or let go.
+    Dpi(DpiOp, bool),
     Stop,
+}
+
+/// DPI ops as numbers, for bindings that notify the app.
+pub fn dpi_op_id(op: DpiOp) -> u32 {
+    match op {
+        DpiOp::Up => 1,
+        DpiOp::Down => 2,
+        DpiOp::Cycle => 3,
+        DpiOp::Sniper => 4,
+    }
+}
+
+fn dpi_op_from(id: u32) -> Option<DpiOp> {
+    Some(match id {
+        1 => DpiOp::Up,
+        2 => DpiOp::Down,
+        3 => DpiOp::Cycle,
+        4 => DpiOp::Sniper,
+        _ => return None,
+    })
+}
+
+/// What the screen is told about the mouse's DPI.
+#[derive(Clone, Serialize)]
+struct DpiStatus {
+    /// Stage 1-3, or 0 for sniper; None when Prism isn't controlling DPI.
+    stage: Option<u8>,
+    dpi: Option<u16>,
 }
 
 /// What the screen gets each frame: exactly what each device was sent.
@@ -91,8 +122,13 @@ impl Engine {
             let mut mouse: Link<Nightsword> = Link::new();
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
+            // DPI: what's been sent to the mouse, the stage it's on, and
+            // whether sniper is held.
+            let mut dpi_applied: Option<DpiSettings> = None;
+            let mut stage: u8 = 0;
+            let mut sniper = false;
             let start = Instant::now();
-            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![] };
+            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() };
 
             loop {
                 node.reconnect(&mut api, |api| {
@@ -103,9 +139,33 @@ impl Engine {
                 kb.reconnect(&mut api, |api| K65Mini::open(api).ok());
                 let had_mouse = mouse.dev.is_some();
                 mouse.reconnect(&mut api, |api| Nightsword::open(api).ok());
-                if !had_mouse && !reporting.is_empty() {
-                    if let Some(m) = &mouse.dev {
-                        let _ = m.report_buttons(&reporting);
+                if !had_mouse && mouse.dev.is_some() {
+                    dpi_applied = None; // a (re)connected mouse needs its DPI set again
+                    if !reporting.is_empty() {
+                        let _ = mouse.dev.as_ref().map(|m| m.report_buttons(&reporting));
+                    }
+                }
+
+                // Keep the mouse's DPI in step with the profile.
+                let dpi_want = cfg.active_profile().map(|p| p.dpi.clone()).unwrap_or_default();
+                if let Some(m) = &mouse.dev {
+                    if dpi_want.enabled && dpi_applied.as_ref() != Some(&dpi_want) {
+                        let first = dpi_applied.as_ref().map_or(true, |d| !d.enabled);
+                        if first || dpi_applied.as_ref().is_some_and(|d| d.start != dpi_want.start) {
+                            stage = dpi_want.start;
+                        }
+                        let _ = m.set_dpi_stages(dpi_want.stages, dpi_want.sniper);
+                        let _ = m.select_dpi(if sniper { 0 } else { stage });
+                        dpi_applied = Some(dpi_want.clone());
+                        emit_dpi(&app, &dpi_want, stage, sniper);
+                    } else if !dpi_want.enabled && dpi_applied.is_some() {
+                        // Give DPI back: hand the mouse over and pick it up again.
+                        let _ = m.release();
+                        mouse.dev = None;
+                        mouse.last_try = None;
+                        dpi_applied = None;
+                        sniper = false;
+                        let _ = app.emit("dpi-status", DpiStatus { stage: None, dpi: None });
                     }
                 }
 
@@ -157,6 +217,22 @@ impl Engine {
                         cfg = c;
                         unsaved_since = Some(Instant::now());
                     }
+                    Ok(Msg::Dpi(op, down)) => {
+                        if let (Some(m), Some(d)) = (&mouse.dev, dpi_applied.as_ref().filter(|d| d.enabled)) {
+                            let before = (stage, sniper);
+                            match (op, down) {
+                                (DpiOp::Up, true) => stage = (stage + 1).min(3),
+                                (DpiOp::Down, true) => stage = stage.saturating_sub(1).max(1),
+                                (DpiOp::Cycle, true) => stage = stage % 3 + 1,
+                                (DpiOp::Sniper, held) => sniper = held,
+                                _ => {}
+                            }
+                            if (stage, sniper) != before {
+                                let _ = m.select_dpi(if sniper { 0 } else { stage });
+                                emit_dpi(&app, d, stage, sniper);
+                            }
+                        }
+                    }
                     Ok(Msg::MouseReporting(names)) => {
                         if names != reporting {
                             reporting = names;
@@ -204,6 +280,16 @@ impl Engine {
         let _ = self.tx.send(Msg::MouseReporting(names));
     }
 
+    /// A callback for bindings: DPI action numbers become DPI changes.
+    pub fn dpi_notifier(&self) -> prism_input::Notifier {
+        let tx = Mutex::new(self.tx.clone());
+        std::sync::Arc::new(move |id, down| {
+            if let (Some(op), Ok(tx)) = (dpi_op_from(id), tx.lock()) {
+                let _ = tx.send(Msg::Dpi(op, down));
+            }
+        })
+    }
+
     /// Stops the thread and hands the devices back. Waits until it's done.
     pub fn stop(&self) {
         let _ = self.tx.send(Msg::Stop);
@@ -211,6 +297,11 @@ impl Engine {
             let _ = t.join();
         }
     }
+}
+
+fn emit_dpi(app: &AppHandle, d: &DpiSettings, stage: u8, sniper: bool) {
+    let (stage, dpi) = if sniper { (0, d.sniper) } else { (stage, d.stages[(stage.clamp(1, 3) - 1) as usize]) };
+    let _ = app.emit("dpi-status", DpiStatus { stage: Some(stage), dpi: Some(dpi) });
 }
 
 /// Reads saved lighting. Settings from before profiles existed become a
@@ -225,7 +316,7 @@ pub fn load(path: &Option<PathBuf>, devices: &Devices) -> LightingStore {
     if let Ok(old) = serde_json::from_str::<Layer>(&text) {
         let layer = Layer { name: "Main".into(), ..old };
         let (keyboard, mouse) = (store.profiles[0].keyboard.clone(), store.profiles[0].mouse.clone());
-        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse, bindings: vec![] });
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse, bindings: vec![], dpi: Default::default() });
     }
     store.sanitized(&devices.fans, &devices.keyboard, &devices.mouse)
 }

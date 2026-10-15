@@ -120,6 +120,9 @@ pub struct Profile {
     /// Key and button bindings.
     #[serde(default)]
     pub bindings: Vec<crate::bindings::BindingDef>,
+    /// Mouse DPI.
+    #[serde(default)]
+    pub dpi: crate::bindings::DpiSettings,
 }
 
 fn default_device_layers() -> Vec<Layer> {
@@ -298,6 +301,7 @@ impl LightingStore {
             keyboard: default_device_layers(),
             mouse: default_device_layers(),
             bindings: vec![],
+            dpi: Default::default(),
         };
         Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true }
     }
@@ -319,6 +323,7 @@ impl LightingStore {
                 keyboard: sanitize_layers(p.keyboard, keyboard),
                 mouse: sanitize_layers(p.mouse, mouse),
                 bindings: crate::bindings::sanitize(p.bindings),
+                dpi: p.dpi.sanitized(),
             })
             .collect();
         self.active = self.active.min(self.profiles.len() - 1);
@@ -421,7 +426,7 @@ mod tests {
     }
 
     fn one(layer: Layer) -> LightingStore {
-        LightingStore { active: 0, brightness: 100, bindings_on: true, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![] }] }
+        LightingStore { active: 0, brightness: 100, bindings_on: true, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }] }
     }
 
     fn fx(effect: Effect, spread: Spread) -> Layer {
@@ -510,7 +515,7 @@ mod tests {
             active: 0,
             brightness: 100,
             bindings_on: true,
-            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![] }],
+            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }],
         };
         let f = render(&hub_ring, &layout, 1.0);
         for fan in 0..3 {
@@ -550,7 +555,7 @@ mod tests {
             active: 99,
             brightness: 200,
             bindings_on: true,
-            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![] }],
+            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }],
         }
         .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert_eq!((s.active, s.brightness), (0, 100));

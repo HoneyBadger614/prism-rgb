@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice};
 use prism_core::nightsword::{buttons_held, Nightsword};
-use prism_input::{Action, ActionSender};
+use prism_input::{Action, ActionSender, Notifier};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 
@@ -22,12 +22,12 @@ pub struct ButtonListener {
 
 impl ButtonListener {
     /// Listens for the given buttons (by name) and performs their actions.
-    pub fn start(bindings: Vec<(&'static str, Action)>) -> Self {
+    pub fn start(bindings: Vec<(&'static str, Action)>, notifier: Option<Notifier>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
             let actions: Vec<Action> = bindings.iter().map(|(_, a)| a.clone()).collect();
-            let Ok(mut sender) = ActionSender::new(&actions) else {
+            let Ok(mut sender) = ActionSender::new(&actions, notifier) else {
                 eprintln!("Prism: couldn't create the virtual device for mouse buttons");
                 return;
             };

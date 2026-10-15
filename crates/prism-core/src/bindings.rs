@@ -28,8 +28,50 @@ pub enum ActionDef {
     Combo { keys: Vec<u16> },
     /// Opens an installed app, by its desktop id (e.g. "firefox").
     Launch { app: String },
+    /// Changes the mouse's DPI.
+    Dpi { op: DpiOp },
     /// Does nothing.
     Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DpiOp {
+    /// Next stage up (stops at the top).
+    Up,
+    /// Next stage down (stops at the bottom).
+    Down,
+    /// Next stage, back to the first after the last.
+    Cycle,
+    /// Sniper DPI while held.
+    Sniper,
+}
+
+/// DPI settings for one profile. Prism only touches the mouse's DPI when
+/// `enabled` is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DpiSettings {
+    pub enabled: bool,
+    pub stages: [u16; 3],
+    pub sniper: u16,
+    /// Stage to start on, 1-3.
+    pub start: u8,
+}
+
+impl Default for DpiSettings {
+    fn default() -> Self {
+        Self { enabled: false, stages: [800, 1600, 3200], sniper: 400, start: 2 }
+    }
+}
+
+impl DpiSettings {
+    pub fn sanitized(mut self) -> Self {
+        self.stages = self.stages.map(crate::nightsword::clamp_dpi);
+        self.sniper = crate::nightsword::clamp_dpi(self.sniper);
+        self.start = self.start.clamp(1, 3);
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +103,7 @@ impl ActionDef {
                 ActionDef::Combo { keys }
             }
             ActionDef::Launch { app } => valid_app_id(&app).then_some(ActionDef::Launch { app })?,
+            ActionDef::Dpi { op } => ActionDef::Dpi { op },
             ActionDef::Disabled => ActionDef::Disabled,
         })
     }
@@ -178,6 +221,14 @@ mod tests {
         let j = serde_json::to_string(&b).unwrap();
         assert_eq!(j, r#"{"device":"mouse","input":275,"action":{"kind":"combo","keys":[29,31]}}"#);
         assert_eq!(serde_json::from_str::<BindingDef>(&j).unwrap(), b);
+    }
+
+    #[test]
+    fn dpi_settings_clamp() {
+        let d = DpiSettings { enabled: true, stages: [10, 1630, 40000], sniper: 0, start: 7 }.sanitized();
+        assert_eq!((d.stages, d.sniper, d.start), ([100, 1650, 18000], 100, 3));
+        let j = r#"{"device":"mouse","input":754,"action":{"kind":"dpi","op":"sniper"}}"#;
+        assert_eq!(serde_json::from_str::<BindingDef>(j).unwrap().action, ActionDef::Dpi { op: DpiOp::Sniper });
     }
 
     #[test]

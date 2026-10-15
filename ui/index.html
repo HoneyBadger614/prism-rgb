@@ -90,6 +90,45 @@
                 <p class="capture-msg" id="capture-msg" hidden></p>
               </section>
 
+              <section class="layers dpi-card" id="dpi-card" aria-label="DPI">
+                <div class="layers-head">
+                  <span class="label">DPI (mouse speed)</span>
+                  <span class="hint" id="dpi-now"></span>
+                  <label class="switch dpi-switch">
+                    <input type="checkbox" id="dpi-on">
+                    <span class="switch-track"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">Let Prism control DPI</span>
+                  </label>
+                </div>
+                <p class="hint" id="dpi-off-note">While this is off, your mouse uses its own DPI settings.</p>
+                <div class="dpi-grid" id="dpi-grid">
+                  <div class="field">
+                    <label class="label" for="dpi-1">Stage 1 <span class="val" id="dpi-1-val"></span></label>
+                    <input type="range" id="dpi-1" min="100" max="18000" step="50">
+                  </div>
+                  <div class="field">
+                    <label class="label" for="dpi-2">Stage 2 <span class="val" id="dpi-2-val"></span></label>
+                    <input type="range" id="dpi-2" min="100" max="18000" step="50">
+                  </div>
+                  <div class="field">
+                    <label class="label" for="dpi-3">Stage 3 <span class="val" id="dpi-3-val"></span></label>
+                    <input type="range" id="dpi-3" min="100" max="18000" step="50">
+                  </div>
+                  <div class="field">
+                    <label class="label" for="dpi-sniper">Sniper <span class="val" id="dpi-sniper-val"></span></label>
+                    <input type="range" id="dpi-sniper" min="100" max="18000" step="50">
+                  </div>
+                  <div class="field">
+                    <span class="label">Start on</span>
+                    <div class="seg seg-3" id="dpi-start" role="group" aria-label="Stage to start on">
+                      <button data-start="1">Stage 1</button>
+                      <button data-start="2">Stage 2</button>
+                      <button data-start="3">Stage 3</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
               <section class="layers" aria-label="Your bindings">
                 <div class="layers-head">
                   <span class="label">Your bindings</span>
@@ -119,6 +158,7 @@
                     <button data-kind="combo">Be a combo</button>
                     <button data-kind="media">Media</button>
                     <button data-kind="launch">Open an app</button>
+                    <button data-kind="dpi">Change DPI</button>
                     <button data-kind="disabled">Do nothing</button>
                   </div>
                 </div>
@@ -145,6 +185,17 @@
                   <span class="label">App</span>
                   <input class="text-input" id="bind-app-search" placeholder="Search apps" spellcheck="false" autocomplete="off">
                   <div class="app-list" id="bind-apps"></div>
+                </div>
+
+                <div class="field" id="bind-dpi-panel" hidden>
+                  <span class="label">DPI action</span>
+                  <div class="seg seg-2" id="bind-dpi-ops" role="group" aria-label="DPI action">
+                    <button data-op="up">DPI up</button>
+                    <button data-op="down">DPI down</button>
+                    <button data-op="cycle">Cycle stages</button>
+                    <button data-op="sniper">Sniper (hold)</button>
+                  </div>
+                  <p class="hint" id="bind-dpi-note"></p>
                 </div>
 
                 <p class="hint" id="bind-disabled-note" hidden>This key or button won't do anything while bindings are on.</p>

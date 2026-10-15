@@ -74,8 +74,21 @@ pub enum Action {
     Combo(Vec<u16>),
     /// Opens an installed app by its desktop id, using `gtk-launch`.
     Launch(String),
+    /// Tells the app something happened (press and release), for actions
+    /// it handles itself, like changing the mouse's DPI. The number says
+    /// which action.
+    Notify(u32),
     /// Does nothing.
     Disabled,
+}
+
+/// Called with (action number, pressed) for [`Action::Notify`].
+pub type Notifier = Arc<dyn Fn(u32, bool) + Send + Sync>;
+
+fn notify(n: &Option<Notifier>, action: Option<&Action>, value: i32) {
+    if let (Some(cb), Some(Action::Notify(id)), PRESSED | RELEASED) = (n, action, value) {
+        cb(*id, value == PRESSED);
+    }
 }
 
 impl Action {
@@ -83,7 +96,7 @@ impl Action {
         match self {
             Action::Key(k) => vec![*k],
             Action::Combo(ks) => ks.clone(),
-            Action::Launch(_) | Action::Disabled => vec![],
+            Action::Launch(_) | Action::Notify(_) | Action::Disabled => vec![],
         }
     }
 }
@@ -129,7 +142,7 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
     match bindings.get(&code) {
         None => vec![(code, value)],
         Some(Action::Key(k)) => vec![(*k, value)],
-        Some(Action::Disabled) | Some(Action::Launch(_)) => vec![],
+        Some(Action::Disabled) | Some(Action::Launch(_)) | Some(Action::Notify(_)) => vec![],
         Some(Action::Combo(keys)) => match value {
             PRESSED => keys.iter().map(|&k| (k, PRESSED)).collect(),
             RELEASED => keys.iter().rev().map(|&k| (k, RELEASED)).collect(),
@@ -143,11 +156,12 @@ fn translate(code: u16, value: i32, bindings: &HashMap<u16, Action>) -> Vec<(u16
 /// virtual device.
 pub struct ActionSender {
     out: VirtualDevice,
+    notifier: Option<Notifier>,
 }
 
 impl ActionSender {
     /// A virtual device able to send every key the given actions use.
-    pub fn new(actions: &[Action]) -> std::io::Result<Self> {
+    pub fn new(actions: &[Action], notifier: Option<Notifier>) -> std::io::Result<Self> {
         let mut keys = AttributeSet::<Key>::new();
         actions.iter().flat_map(Action::keys).for_each(|k| keys.insert(Key::new(k)));
         // A device with no keys at all isn't allowed; give it one harmless key.
@@ -155,7 +169,7 @@ impl ActionSender {
             keys.insert(Key::KEY_UNKNOWN);
         }
         let out = VirtualDeviceBuilder::new()?.name(VIRTUAL_NAME).with_keys(&keys)?.build()?;
-        Ok(Self { out })
+        Ok(Self { out, notifier })
     }
 
     /// Sends what `action` does when its button is pressed (`down`) or let go.
@@ -165,6 +179,7 @@ impl ActionSender {
         }
         // Reuse the same press/release rules as remapped keys.
         let value = if down { PRESSED } else { RELEASED };
+        notify(&self.notifier, Some(action), value);
         let rules: HashMap<u16, Action> = [(0, action.clone())].into();
         let events: Vec<InputEvent> = translate(0, value, &rules)
             .into_iter()
@@ -188,7 +203,7 @@ pub struct Remapper {
 impl Remapper {
     /// Starts remapping. Only devices that send a bound key are taken over;
     /// with no bindings, nothing is touched.
-    pub fn start(bindings: &[Binding]) -> std::io::Result<Self> {
+    pub fn start(bindings: &[Binding], notifier: Option<Notifier>) -> std::io::Result<Self> {
         let mut by_product: HashMap<u16, HashMap<u16, Action>> = HashMap::new();
         for b in bindings {
             by_product.entry(b.product).or_default().insert(b.input, b.action.clone());
@@ -232,8 +247,8 @@ impl Remapper {
         for (mut d, map) in chosen {
             d.device.grab()?;
             grabbed.push(d.path.clone());
-            let (stop, out) = (stop.clone(), out.clone());
-            threads.push(std::thread::spawn(move || pump(d.device, map, out, stop)));
+            let (stop, out, n) = (stop.clone(), out.clone(), notifier.clone());
+            threads.push(std::thread::spawn(move || pump(d.device, map, out, stop, n)));
         }
         Ok(Self { stop, threads, grabbed })
     }
@@ -258,7 +273,13 @@ impl Drop for Remapper {
 }
 
 /// Reads one taken-over device and re-sends its events until told to stop.
-fn pump(mut dev: Device, bindings: HashMap<u16, Action>, out: Arc<Mutex<VirtualDevice>>, stop: Arc<AtomicBool>) {
+fn pump(
+    mut dev: Device,
+    bindings: HashMap<u16, Action>,
+    out: Arc<Mutex<VirtualDevice>>,
+    stop: Arc<AtomicBool>,
+    notifier: Option<Notifier>,
+) {
     let fd = dev.as_raw_fd();
     while !stop.load(Ordering::SeqCst) {
         // Wait up to 100 ms for input so we notice `stop` promptly.
@@ -273,6 +294,7 @@ fn pump(mut dev: Device, bindings: HashMap<u16, Action>, out: Arc<Mutex<VirtualD
                     if let (Some(Action::Launch(app)), PRESSED) = (bindings.get(&ev.code()), ev.value()) {
                         launch(app);
                     }
+                    notify(&notifier, bindings.get(&ev.code()), ev.value());
                     for (code, value) in translate(ev.code(), ev.value(), &bindings) {
                         batch.push(InputEvent::new(EventType::KEY, code, value));
                     }

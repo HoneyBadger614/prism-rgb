@@ -42,10 +42,13 @@ const Bindings = (() => {
       case "key": return nameOf(action.key);
       case "combo": return action.keys.map((k) => MODIFIERS.find(([c]) => c === k)?.[1] || nameOf(k)).join(" + ");
       case "launch": return `Opens ${apps?.find((a) => a.id === action.app)?.name || action.app}`;
+      case "dpi": return DPI_OPS[action.op];
       case "disabled": return "Does nothing";
     }
     return "";
   }
+
+  const DPI_OPS = { up: "DPI up", down: "DPI down", cycle: "Cycle DPI stages", sniper: "Sniper DPI while held" };
 
   function kindOf(action) {
     if (!action) return "normal";
@@ -220,6 +223,13 @@ const Bindings = (() => {
     $("bind-combo-panel").hidden = kind !== "combo";
     $("bind-media-panel").hidden = kind !== "media";
     $("bind-app-panel").hidden = kind !== "launch";
+    $("bind-dpi-panel").hidden = kind !== "dpi";
+    if (kind === "dpi") {
+      document.querySelectorAll("[data-op]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.op === b.action.op)));
+      $("bind-dpi-note").textContent = Lighting.profile().dpi.enabled
+        ? ""
+        : "Turn on “Let Prism control DPI” on the mouse's Key bindings tab for this to work.";
+    }
     $("bind-disabled-note").hidden = kind !== "disabled";
 
     if (kind === "key") keyOptions($("bind-key-select"), b.action.key);
@@ -277,6 +287,7 @@ const Bindings = (() => {
       case "media": return setBinding({ kind: "key", key: 164 });
       case "key": return setBinding({ kind: "key", key: current?.kind === "key" ? current.key : picked === 58 ? 1 : 30 });
       case "combo": return setBinding({ kind: "combo", keys: [29, 31] });
+      case "dpi": return setBinding({ kind: "dpi", op: picked === 0x2f2 ? "sniper" : picked === 0x2f1 ? "down" : "up" });
       case "launch":
         // Nothing saved until an app is chosen; just show the list.
         renderAppsOnly();
@@ -287,7 +298,7 @@ const Bindings = (() => {
   // Show the app list without saving a binding yet.
   function renderAppsOnly() {
     document.querySelectorAll("[data-kind]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.kind === "launch")));
-    ["bind-key-panel", "bind-combo-panel", "bind-media-panel"].forEach((id) => ($(id).hidden = true));
+    ["bind-key-panel", "bind-combo-panel", "bind-media-panel", "bind-dpi-panel"].forEach((id) => ($(id).hidden = true));
     $("bind-disabled-note").hidden = true;
     $("bind-app-panel").hidden = false;
     renderApps(null);
@@ -320,9 +331,37 @@ const Bindings = (() => {
     }) : [el("p", "hint", `No bindings on this ${dev} yet. Everything works as normal.`)]));
   }
 
+  /* ---------- DPI ---------- */
+
+  function renderDpi() {
+    $("dpi-card").hidden = dev !== "mouse";
+    if (dev !== "mouse") return;
+    const d = Lighting.profile().dpi;
+    $("dpi-on").checked = d.enabled;
+    $("dpi-card").classList.toggle("off", !d.enabled);
+    $("dpi-off-note").hidden = d.enabled;
+    if (!d.enabled) $("dpi-now").textContent = "";
+    const slider = (id, v) => {
+      $(id).value = v;
+      $(id).style.setProperty("--fill", `${((v - 100) / 17900) * 100}%`);
+      $(`${id}-val`).textContent = `${v} DPI`;
+    };
+    d.stages.forEach((v, i) => slider(`dpi-${i + 1}`, v));
+    slider("dpi-sniper", d.sniper);
+    document.querySelectorAll("[data-start]").forEach((x) => x.setAttribute("aria-pressed", String(Number(x.dataset.start) === d.start)));
+  }
+
+  function editDpi(changes) {
+    Object.assign(Lighting.profile().dpi, changes);
+    Lighting.save();
+    renderDpi();
+    renderEditor();
+  }
+
   function render() {
     if (!Lighting.state()) return;
     $("bindings-on").checked = store().bindings_on;
+    renderDpi();
     renderPicker();
     renderEditor();
     renderList();
@@ -360,6 +399,29 @@ const Bindings = (() => {
       renderApps(find(picked)?.action.app);
     });
     Lighting.onChange(() => { if (!$("bindings-view").hidden) render(); });
+
+    document.querySelectorAll("[data-op]").forEach((x) => x.addEventListener("click", () => setBinding({ kind: "dpi", op: x.dataset.op })));
+    $("dpi-on").addEventListener("change", (e) => editDpi({ enabled: e.target.checked }));
+    // Sliders show the number while dragging and send it to the mouse on release.
+    const live = (id) => $(id).addEventListener("input", (e) => {
+      $(`${id}-val`).textContent = `${e.target.value} DPI`;
+      $(id).style.setProperty("--fill", `${((e.target.value - 100) / 17900) * 100}%`);
+    });
+    [1, 2, 3].forEach((n) => {
+      live(`dpi-${n}`);
+      $(`dpi-${n}`).addEventListener("change", (e) => {
+        const stages = [...Lighting.profile().dpi.stages];
+        stages[n - 1] = Number(e.target.value);
+        editDpi({ stages });
+      });
+    });
+    live("dpi-sniper");
+    $("dpi-sniper").addEventListener("change", (e) => editDpi({ sniper: Number(e.target.value) }));
+    document.querySelectorAll("[data-start]").forEach((x) => x.addEventListener("click", () => editDpi({ start: Number(x.dataset.start) })));
+    window.__TAURI__.event.listen("dpi-status", (e) => {
+      const { stage, dpi } = e.payload;
+      $("dpi-now").textContent = stage === null ? "" : `Now: ${stage === 0 ? "sniper" : `stage ${stage}`} · ${dpi} DPI`;
+    });
   }
 
   return { init, show };

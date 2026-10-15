@@ -401,5 +401,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 .app-item:hover { background: var(--raised); }
 .app-item.on { background: color-mix(in srgb, var(--accent) 20%, var(--raised)); font-weight: 700; }
 select.text-input { width: 100%; }
+.dpi-switch { margin-left: auto; font-size: 13px; }
+.dpi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.dpi-grid .field:last-child { grid-column: 1 / -1; }
+.dpi-card.off .dpi-grid { opacity: .45; pointer-events: none; }
+#dpi-now { color: var(--accent); font-family: var(--font-mono); }
 .bind-row-arrow { color: var(--accent); font-family: var(--font-mono); }
 .editing-name { font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1.1; }

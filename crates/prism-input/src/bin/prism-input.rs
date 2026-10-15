@@ -102,7 +102,7 @@ fn remap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let output = key_code(to).ok_or(format!("unknown key '{to}'"))?;
     let seconds: u64 = rest.first().and_then(|s| s.parse().ok()).unwrap_or(20);
 
-    let r = Remapper::start(&[Binding { product, input, action: Action::Key(output) }])?;
+    let r = Remapper::start(&[Binding { product, input, action: Action::Key(output) }], None)?;
     if r.grabbed.is_empty() {
         return Err(format!("no Corsair {which} sends {from}").into());
     }

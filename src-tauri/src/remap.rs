@@ -9,7 +9,7 @@ use prism_core::effects::LightingStore;
 use prism_core::{k65_mini, nightsword};
 use prism_input::{capture_press, Action, Binding, Remapper};
 
-use crate::engine::Engine;
+use crate::engine::{dpi_op_id, Engine};
 use crate::mouse_buttons::ButtonListener;
 
 pub fn product(device: InputDevice) -> u16 {
@@ -24,6 +24,7 @@ fn action(a: &ActionDef) -> Action {
         ActionDef::Key { key } => Action::Key(*key),
         ActionDef::Combo { keys } => Action::Combo(keys.clone()),
         ActionDef::Launch { app } => Action::Launch(app.clone()),
+        ActionDef::Dpi { op } => Action::Notify(dpi_op_id(*op)),
         ActionDef::Disabled => Action::Disabled,
     }
 }
@@ -71,7 +72,7 @@ impl Remap {
             active.iter().filter_map(|b| reported(b).map(|name| (name, action(&b.action)))).collect();
         engine.set_mouse_reporting(on_channel.iter().map(|(n, _)| *n).collect());
         if !on_channel.is_empty() {
-            g.buttons = Some(ButtonListener::start(on_channel));
+            g.buttons = Some(ButtonListener::start(on_channel, Some(engine.dpi_notifier())));
         }
 
         // ...everything else is remapped through Linux input.
@@ -81,7 +82,7 @@ impl Remap {
             .map(|b| Binding { product: product(b.device), input: b.input, action: action(&b.action) })
             .collect();
         if !list.is_empty() {
-            match Remapper::start(&list) {
+            match Remapper::start(&list, Some(engine.dpi_notifier())) {
                 Ok(r) => g.remapper = Some(r),
                 Err(e) => g.error = Some(format!("Couldn't take over the keyboard or mouse: {e}")),
             }

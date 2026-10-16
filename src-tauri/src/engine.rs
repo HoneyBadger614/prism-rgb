@@ -247,8 +247,8 @@ impl Engine {
                 let had_mouse = mouse.dev.is_some();
                 mouse.reconnect(&mut api, |api| Nightsword::open_with(api, !resuming).ok());
                 resuming = false; // only the very first connection
-                if let (Some(m), Ok(z)) = (&mouse.dev, <[Rgb; nightsword::ZONE_COUNT]>::try_from(zones)) {
-                    if m.set_colors(&z).is_err() {
+                if let Some(m) = mouse.dev.as_ref().filter(|m| zones.len() == m.model.zones.len()) {
+                    if m.set_zone_colors(zones).is_err() {
                         mouse.dev = None;
                     }
                 }

@@ -150,7 +150,7 @@ function render() {
   $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · ${d.bus}${d.experimental ? " · Experimental: not yet tested with Prism" : ""}`;
   // Fans, the graphics card and the motherboard have no buttons or onboard
   // memory, so they only get Lighting.
-  const onlyLighting = ["lighting", "gpu", "motherboard"].includes(d.kind);
+  const onlyLighting = ["lighting", "gpu", "motherboard"].includes(d.kind) || d.lighting_only;
   if (onlyLighting) tab = "light";
   document.querySelector(".tabs").hidden = onlyLighting;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.t === tab)));

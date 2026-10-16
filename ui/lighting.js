@@ -203,7 +203,8 @@ const Lighting = (() => {
     bar.replaceChildren(el("span", "label", "What's plugged in"), grid, el("p", "hint", note));
   }
 
-  const group = (name) => groups().find(([n]) => n === name)[1];
+  // A named group's LEDs; none if this device doesn't have it.
+  const group = (name) => (groups().find(([n]) => n === name) || [null, []])[1];
   const ledsTarget = (keys) => ({ kind: "leds", leds: keys.map(ref) });
   const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 
@@ -851,13 +852,17 @@ const Lighting = (() => {
   // Drawn in a 120 x 190 box (front at the top), scaled to fit.
   const MOUSE_BODY = "M60 6c30 0 50 22 50 60v58c0 36-22 60-50 60S10 160 10 124V66C10 28 30 6 60 6z";
   // Each zone, in ZONES order: how to draw it, and a box around it for clicking.
-  const MOUSE_ZONES = [
-    { path: "M36 20c10-7 38-7 48 0", width: 5, box: [34, 12, 52, 12], side: 1 },  // Front: arc along the front
-    { rect: [55, 26, 10, 24, 5], box: [53, 24, 14, 28], side: 1 },                  // Scroll wheel
-    { path: "M42 150c6 10 30 10 36 0", width: 6, box: [40, 146, 40, 16], side: -1 }, // Logo, on the palm
-    { rect: [12, 80, 5, 40, 2.5], box: [9, 78, 11, 44], side: -1 },                 // DPI indicator, left side
-    { path: "M38 172c9 8 35 8 44 0", width: 4, box: [36, 167, 48, 14], side: 1 },   // Back light, under the logo
-  ];
+  // Where each kind of zone is drawn, by name (each mouse has some of them).
+  const MOUSE_SHAPES = {
+    "Front": { path: "M36 20c10-7 38-7 48 0", width: 5, box: [34, 12, 52, 12], side: 1 },   // arc along the front
+    "Scroll wheel": { rect: [55, 26, 10, 24, 5], box: [53, 24, 14, 28], side: 1 },
+    "Logo": { path: "M42 150c6 10 30 10 36 0", width: 6, box: [40, 146, 40, 16], side: -1 }, // on the palm
+    "DPI indicator": { rect: [12, 80, 5, 40, 2.5], box: [9, 78, 11, 44], side: -1 },        // left side
+    "Back": { path: "M38 172c9 8 35 8 44 0", width: 4, box: [36, 167, 48, 14], side: 1 },   // under the logo
+    "Thumb": { rect: [14, 70, 6, 50, 3], box: [11, 68, 12, 54], side: -1 },                 // thumb side
+    "Side lights": { rect: [103, 80, 5, 40, 2.5], box: [100, 78, 11, 44], side: 1 },        // right side
+  };
+  const mouseZones = () => light.zones.map((n) => MOUSE_SHAPES[n] || MOUSE_SHAPES.Back);
 
   function drawMouse(canvas) {
     const dpr = window.devicePixelRatio || 1;
@@ -898,7 +903,7 @@ const Lighting = (() => {
 
     spots = [];
     const marks = [];
-    MOUSE_ZONES.forEach((z, i) => {
+    mouseZones().forEach((z, i) => {
       const c = frame.mouse[i] || "#000000";
       inMouse(() => {
         ctx.shadowColor = c;
@@ -924,7 +929,7 @@ const Lighting = (() => {
     // labels with pointer lines, left or right of the mouse
     ctx.font = `12px ${font}`;
     ctx.textBaseline = "middle";
-    MOUSE_ZONES.forEach((z, i) => {
+    mouseZones().forEach((z, i) => {
       const sp = spots[i];
       const [left] = toScreen(-14, 0);
       const [right] = toScreen(134, 0);

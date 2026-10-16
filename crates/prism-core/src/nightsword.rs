@@ -127,6 +127,60 @@ pub const ZONES: [(&str, u8); 5] =
     [("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3), ("Back", 6)];
 pub const ZONE_COUNT: usize = ZONES.len();
 
+/// A mouse that talks like the Nightsword (Corsair's older protocol).
+#[derive(Debug)]
+pub struct MouseModel {
+    pub pid: u16,
+    pub name: &'static str,
+    /// Lighting zones: (name, id in the color message). Ids follow
+    /// ckb-next and OpenRGB: front 1, logo 2, DPI 3, wheel 4, thumb 5,
+    /// side/back 6.
+    pub zones: &'static [(&'static str, u8)],
+    /// Checked on a real device.
+    pub tested: bool,
+    /// Button reporting, DPI and onboard memory are worked out for this
+    /// model. Other models get lighting only.
+    pub full: bool,
+}
+
+const M65: &[(&str, u8)] = &[("Scroll wheel", 1), ("Logo", 2), ("DPI indicator", 3)];
+const M65_ELITE: &[(&str, u8)] = &[("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3)];
+const SABRE: &[(&str, u8)] = &[("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3)];
+const SCIMITAR: &[(&str, u8)] = &[("Front", 1), ("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3), ("Thumb", 5)];
+const IRONCLAW: &[(&str, u8)] = &[("Scroll wheel", 4), ("Logo", 2), ("DPI indicator", 3)];
+const HARPOON: &[(&str, u8)] = &[("Logo", 3)];
+const GLAIVE: &[(&str, u8)] = &[("Front", 1), ("Logo", 2), ("Side lights", 6)];
+
+const fn mouse(pid: u16, name: &'static str, zones: &'static [(&'static str, u8)]) -> MouseModel {
+    MouseModel { pid, name, zones, tested: false, full: false }
+}
+
+pub const MODELS: &[MouseModel] = &[
+    MouseModel { pid: PID, name: "Nightsword RGB", zones: &ZONES, tested: true, full: true },
+    mouse(0x1b12, "M65 RGB", M65),
+    mouse(0x1b2e, "M65 PRO RGB", M65),
+    mouse(0x1b5a, "M65 RGB Elite", M65_ELITE),
+    mouse(0x1b2f, "Sabre RGB", SABRE),
+    mouse(0x1b32, "Sabre RGB Optical", SABRE),
+    mouse(0x1b1e, "Scimitar RGB", SCIMITAR),
+    mouse(0x1b3e, "Scimitar PRO RGB", SCIMITAR),
+    mouse(0x1b8b, "Scimitar Elite RGB", SCIMITAR),
+    mouse(0x1b5d, "Ironclaw RGB", IRONCLAW),
+    mouse(0x1b3c, "Harpoon RGB", HARPOON),
+    mouse(0x1b75, "Harpoon RGB PRO", HARPOON),
+    mouse(0x1b34, "Glaive RGB", GLAIVE),
+    mouse(0x1b74, "Glaive RGB PRO", GLAIVE),
+];
+
+pub fn model(pid: u16) -> Option<&'static MouseModel> {
+    MODELS.iter().find(|m| m.pid == pid)
+}
+
+/// The first connected mouse of a model in [`MODELS`]. Read-only.
+pub fn connected(api: &HidApi) -> Option<&'static MouseModel> {
+    find_devices(api).iter().find_map(|d| model(d.pid))
+}
+
 /// The mouse's 10 buttons and the code bindings use for each. The first
 /// five send standard Linux button codes. The rest are handled inside the
 /// mouse and send nothing to Linux, so Prism gives them codes of its own
@@ -154,13 +208,16 @@ pub fn reported_button(code: u16) -> Option<&'static str> {
 #[derive(Debug)]
 pub enum Error {
     NotFound,
+    /// Only worked out for some models (see [`MouseModel::full`]).
+    Unsupported,
     Usb(hidapi::HidError),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::NotFound => write!(f, "Nightsword RGB is not connected"),
+            Error::NotFound => write!(f, "No supported Corsair mouse is connected"),
+            Error::Unsupported => write!(f, "Prism can only change this mouse's lighting so far"),
             Error::Usb(e) => write!(f, "USB error: {e}"),
         }
     }
@@ -222,6 +279,8 @@ fn color_report(colors: &[Rgb; ZONE_COUNT]) -> [u8; REPORT_LEN] {
 
 pub struct Nightsword {
     dev: HidDevice,
+    /// Which mouse this is (the Nightsword, or one that talks the same way).
+    pub model: &'static MouseModel,
 }
 
 impl Nightsword {
@@ -237,16 +296,30 @@ impl Nightsword {
     pub fn open_with(api: &HidApi, take_control: bool) -> Result<Self> {
         let path = find_devices(api)
             .into_iter()
-            .find(|d| d.pid == PID)
-            .and_then(|d| d.interfaces.into_iter().find(|i| i.number == INTERFACE))
-            .ok_or(Error::NotFound)?
-            .path;
+            .find(|d| model(d.pid).is_some())
+            .ok_or(Error::NotFound)?;
+        let found = model(path.pid).ok_or(Error::NotFound)?;
+        let path = path.interfaces.into_iter().find(|i| i.number == INTERFACE).ok_or(Error::NotFound)?.path;
         let c_path = CString::new(path).map_err(|_| Error::NotFound)?;
-        let mouse = Self { dev: api.open_path(&c_path)? };
+        let mouse = Self { dev: api.open_path(&c_path)?, model: found };
         if take_control {
             mouse.dev.write(&report(&[cmd::MODE, mode::SOFTWARE]))?;
         }
         Ok(mouse)
+    }
+
+    /// Err(Unsupported) unless buttons, DPI and onboard memory are worked
+    /// out for this model.
+    fn full(&self) -> Result<()> {
+        if self.model.full { Ok(()) } else { Err(Error::Unsupported) }
+    }
+
+    /// Shows one screen color per zone, in the order of this model's zones.
+    /// Corrected for LEDs with [`Rgb::to_led`].
+    pub fn set_zone_colors(&self, colors: &[Rgb]) -> Result<()> {
+        let zones: Vec<(u8, Rgb)> = self.model.zones.iter().zip(colors).map(|((_, id), c)| (*id, c.to_led())).collect();
+        self.dev.write(&zones_report(&zones))?;
+        Ok(())
     }
 
     /// Shows one screen color per zone, in [`ZONES`] order. Corrected for
@@ -267,6 +340,7 @@ impl Nightsword {
     /// of the mouse handling them. Every other button goes back to normal.
     /// Not saved on the mouse: [`Nightsword::release`] puts them all back.
     pub fn report_buttons(&self, names: &[&str]) -> Result<()> {
+        self.full()?;
         std::thread::sleep(GAP);
         self.dev.write(&button_setup_report(names))?;
         std::thread::sleep(GAP);
@@ -277,6 +351,7 @@ impl Nightsword {
     /// this is for while Prism runs; the mouse's own settings come back when
     /// it's handed back.
     pub fn set_dpi_stages(&self, stages: [u16; 3], sniper: u16) -> Result<()> {
+        self.full()?;
         std::thread::sleep(GAP);
         self.dev.write(&dpi_slot_report(DPI_SLOT_SNIPER, sniper))?;
         for (i, dpi) in stages.iter().enumerate() {
@@ -289,6 +364,7 @@ impl Nightsword {
 
     /// Switches to DPI stage 1-3, or 0 for the sniper DPI.
     pub fn select_dpi(&self, stage: u8) -> Result<()> {
+        self.full()?;
         std::thread::sleep(GAP);
         self.dev.write(&dpi_select_report(stage))?;
         std::thread::sleep(GAP);
@@ -367,6 +443,7 @@ impl Nightsword {
     /// 5 x 60 bytes (each committed), close, finish. CHANGES THE MOUSE'S
     /// MEMORY: callers back up first.
     pub fn write_named(&self, api: &HidApi, folder: u8, name: &str, data: &[u8]) -> Result<()> {
+        self.full()?;
         use files::*;
         if data.len() > MAX_FILE || name.is_empty() || name.len() > 12 || !name.is_ascii() {
             return Err(Error::NotFound);
@@ -401,6 +478,7 @@ impl Nightsword {
 
     /// Reads one file by name from a profile folder. Read-only.
     pub fn read_file(&self, api: &HidApi, folder: u8, name: &str) -> Result<Vec<u8>> {
+        self.full()?;
         let answers = Self::open_buttons(api)?;
         let enter: Vec<u8> =
             if folder == 0 { vec![WRITE, files::FIELD, files::ENTER] } else { vec![WRITE, files::FIELD, files::ENTER, folder] };
@@ -414,6 +492,7 @@ impl Nightsword {
     /// folder, plus the list of profiles. Read-only: nothing on the mouse
     /// changes. Returns (folder, name, contents) for each file found.
     pub fn read_all_files(&self, api: &HidApi) -> Result<Vec<(u8, String, Vec<u8>)>> {
+        self.full()?;
         use files::*;
         let answers = Self::open_buttons(api)?;
         let mut out = Vec::new();
@@ -486,9 +565,25 @@ impl Nightsword {
 /// Where each zone sits on the mouse for effects: x runs front to back,
 /// y back to front (so the second direction is the first reversed).
 pub fn surface() -> crate::effects::Surface {
-    // front, scroll wheel, logo (palm), DPI light (left side, mid-mouse), back
-    let along = [0.0, 1.0, 3.0, 2.0, 4.0];
-    let pts: Vec<(f64, f64)> = along.iter().map(|&a| (a, 3.0 - a)).collect();
+    surface_for(&MODELS[0])
+}
+
+/// Where each of a model's zones sits, front to back, for effects.
+pub fn surface_for(m: &MouseModel) -> crate::effects::Surface {
+    let along = |name: &str| match name {
+        "Front" => 0.0,
+        "Scroll wheel" => 1.0,
+        "DPI indicator" => 2.0,
+        "Thumb" | "Side lights" => 2.5,
+        "Logo" => 3.0,
+        _ => 4.0, // back
+    };
+    let mut pts: Vec<(f64, f64)> = m.zones.iter().map(|(n, _)| (along(n), 3.0 - along(n))).collect();
+    if pts.len() == 1 {
+        pts.push((4.0, -1.0)); // a grid needs two points to measure; the extra is unused
+        let s = crate::effects::Surface::grid(&pts);
+        return crate::effects::Surface { channels: vec![1], leds: s.leds[..1].to_vec(), laps: s.laps };
+    }
     crate::effects::Surface::grid(&pts)
 }
 

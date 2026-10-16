@@ -39,6 +39,8 @@ struct DeviceInfo {
     recognized: bool,
     /// Supported from other projects' notes, not yet checked on a real one.
     experimental: bool,
+    /// Only lighting works (no bindings or onboard memory yet).
+    lighting_only: bool,
     interfaces: usize,
 }
 
@@ -62,15 +64,16 @@ fn list_devices(state: State<AppState>) -> Result<Vec<DeviceInfo>, String> {
             },
             recognized: d.is_supported(),
             experimental: d.model.is_some_and(|m| !m.tested),
+            lighting_only: d.model.is_some_and(|m| m.kind == DeviceKind::Mouse) && !nightsword::model(d.pid).is_some_and(|m| m.full),
             interfaces: d.interfaces.len(),
         })
         .collect();
     if let Some(g) = &state.gpu {
-        out.push(DeviceInfo { name: g.name.into(), product: g.name.into(), usb_id: String::new(), bus: format!("I2C bus {}", g.bus), kind: "gpu", recognized: true, experimental: false, interfaces: 1 });
+        out.push(DeviceInfo { name: g.name.into(), product: g.name.into(), usb_id: String::new(), bus: format!("I2C bus {}", g.bus), kind: "gpu", recognized: true, experimental: false, lighting_only: true, interfaces: 1 });
     }
     if state.board.is_some() && asus_aura::present(&api) {
         let name = "ASUS Aura motherboard";
-        out.push(DeviceInfo { name: name.into(), product: name.into(), usb_id: String::new(), bus: format!("USB {:04x}:{:04x}", asus_aura::ASUS_VID, asus_aura::SUPPORTED_PIDS[0]), kind: "motherboard", recognized: true, experimental: false, interfaces: 1 });
+        out.push(DeviceInfo { name: name.into(), product: name.into(), usb_id: String::new(), bus: format!("USB {:04x}:{:04x}", asus_aura::ASUS_VID, asus_aura::SUPPORTED_PIDS[0]), kind: "motherboard", recognized: true, experimental: false, lighting_only: true, interfaces: 1 });
     }
     Ok(out)
 }
@@ -83,6 +86,9 @@ pub(crate) struct AppState {
     mouse: Surface,
     gpu: Option<msi_gpu::FoundGpu>,
     board: Option<asus_aura::Layout>,
+    /// The mouse model connected at startup (its zones shape the mouse's
+    /// lighting); the Nightsword if none.
+    mouse_model: &'static nightsword::MouseModel,
     remap: Remap,
 }
 
@@ -127,7 +133,7 @@ fn get_lighting(state: State<AppState>) -> LightingState {
         pieces: effects::PIECES,
         node: HidApi::new().ok().and_then(|api| find_devices(&api).into_iter().find_map(|d| lighting_node::model(d.pid))).map(|m| (m.1, m.2, m.3)),
         keys: state.keys.clone(),
-        mouse_zones: nightsword::ZONES.iter().map(|z| z.0).collect(),
+        mouse_zones: state.mouse_model.zones.iter().map(|z| z.0).collect(),
         catalog: bindings::CATALOG,
         mouse_buttons: &nightsword::BUTTONS,
         bindings_error: state.remap.error(),
@@ -381,13 +387,14 @@ fn main() {
             // The motherboard is opened now to learn what lights it has; the
             // engine then keeps it.
             let gpu = msi_gpu::find();
+            let mouse_model = HidApi::new().ok().and_then(|api| nightsword::connected(&api)).unwrap_or(&nightsword::MODELS[0]);
             let aura = HidApi::new().ok().and_then(|api| asus_aura::AsusAura::open(&api).map_err(|e| eprintln!("motherboard: {e}")).ok());
             let board = aura.as_ref().map(|a| a.layout);
             let devices = Devices {
                 fans: effects::node_max_surface(),
                 keyboard: k65_mini::surface(&keys),
                 keys: keys.clone(),
-                mouse: nightsword::surface(),
+                mouse: nightsword::surface_for(mouse_model),
                 gpu: gpu.clone(),
                 aura,
             };
@@ -396,7 +403,7 @@ fn main() {
             let remap = Remap::default();
             let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to, resume_at);
             remap.apply(&config, &engine);
-            app.manage(AppState { engine, fans, keyboard, keys, mouse, gpu, board, remap });
+            app.manage(AppState { engine, fans, keyboard, keys, mouse, gpu, board, mouse_model, remap });
             tray::create(app.handle())?;
             if !hidden {
                 tray::show_window(app.handle());

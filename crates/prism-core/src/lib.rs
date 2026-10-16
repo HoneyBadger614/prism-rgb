@@ -121,6 +121,20 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     KnownModel { pid: 0x1baf, name: "K65 RGB Mini", kind: DeviceKind::Keyboard, tested: true },
     KnownModel { pid: 0x1b5c, name: "Nightsword RGB", kind: DeviceKind::Mouse, tested: true },
     KnownModel { pid: 0x0c0b, name: "Lighting Node Pro", kind: DeviceKind::LightingController, tested: true },
+    // Same protocol as the Nightsword (see nightsword::MODELS); lighting only.
+    KnownModel { pid: 0x1b12, name: "M65 RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b2e, name: "M65 PRO RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b5a, name: "M65 RGB Elite", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b2f, name: "Sabre RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b32, name: "Sabre RGB Optical", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b1e, name: "Scimitar RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b3e, name: "Scimitar PRO RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b8b, name: "Scimitar Elite RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b5d, name: "Ironclaw RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b3c, name: "Harpoon RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b75, name: "Harpoon RGB PRO", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b34, name: "Glaive RGB", kind: DeviceKind::Mouse, tested: false },
+    KnownModel { pid: 0x1b74, name: "Glaive RGB PRO", kind: DeviceKind::Mouse, tested: false },
     // Same protocol as the Lighting Node Pro (see lighting_node::MODELS).
     KnownModel { pid: 0x0c1a, name: "Lighting Node Core", kind: DeviceKind::LightingController, tested: false },
     KnownModel { pid: 0x0c10, name: "Commander Pro", kind: DeviceKind::LightingController, tested: false },
@@ -228,6 +242,15 @@ mod tests {
         for m in lighting_node::MODELS {
             let k = lookup_model(m.0).expect("listed");
             assert_eq!((k.name, k.kind, k.tested), (m.1, DeviceKind::LightingController, m.3));
+        }
+    }
+
+    #[test]
+    fn mice_match_the_driver() {
+        for m in nightsword::MODELS {
+            let k = lookup_model(m.pid).expect("listed");
+            assert_eq!((k.name, k.kind, k.tested), (m.name, DeviceKind::Mouse, m.tested));
+            assert_eq!(nightsword::surface_for(m).leds.len(), m.zones.len(), "{}", m.name);
         }
     }
 

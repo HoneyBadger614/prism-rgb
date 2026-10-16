@@ -74,7 +74,8 @@ const Lighting = (() => {
     if (dev === "board") return boardLens().flatMap((n, c) => Array.from({ length: n }, (_, i) => key(c, i)));
     const out = [];
     light.layout.forEach((ch, c) => {
-      for (let i = 0; i < ch.fans * (ch.inner + ch.outer); i++) out.push(key(0 + c, i));
+      const n = ch.pieces.reduce((t, p) => t + p.inner + p.outer, 0);
+      for (let i = 0; i < n; i++) out.push(key(c, i));
     });
     return out;
   }
@@ -106,20 +107,100 @@ const Lighting = (() => {
       return [["All", allLeds()], ["Board lights", strip(0)], ...lens.slice(1).map((_, h) => [headerName(h), strip(h + 1)])];
     }
     const g = [["All", allLeds()], ["Hubs", []], ["Rings", []]];
-    let fanNo = 0;
+    for (const p of pieceList()) {
+      const leds = [];
+      for (let j = 0; j < p.leds; j++) {
+        const k = key(p.c, p.base + j);
+        leds.push(k);
+        if (p.shape === "fan") (j < p.inner ? g[1][1] : g[2][1]).push(k);
+      }
+      g.push([p.label, leds]);
+    }
+    // Only fans with a center hub have hubs.
+    return g.filter(([n, set]) => !(n === "Hubs" || n === "Rings") || g[1][1].length);
+  }
+
+  // Every fan and strip, in order: where its LEDs start and its label
+  // ("Fan 2", "Strip 1").
+  function pieceList() {
+    const out = [];
+    const counts = {};
     light.layout.forEach((ch, c) => {
-      const per = ch.inner + ch.outer;
-      for (let f = 0; f < ch.fans; f++) {
-        const fan = [];
-        for (let j = 0; j < per; j++) {
-          const k = key(c, f * per + j);
-          fan.push(k);
-          (j < ch.inner ? g[1][1] : g[2][1]).push(k);
-        }
-        g.push([`Fan ${++fanNo}`, fan]);
+      let base = 0;
+      for (const p of ch.pieces) {
+        const kind = p.shape === "strip" ? "Strip" : "Fan";
+        counts[kind] = (counts[kind] || 0) + 1;
+        out.push({ ...p, c, base, leds: p.inner + p.outer, label: `${kind} ${counts[kind]}` });
+        base += p.inner + p.outer;
       }
     });
-    return g;
+    return out;
+  }
+
+  const LEGACY = [["ll", "ll", "ll"], []]; // what Prism assumed before channels could be set
+  const MAX_CHANNEL_LEDS = 204;
+
+  // Rebuilds the layout from the settings (the screen keeps its own copy).
+  function syncLayout() {
+    const ids = light.store.node_channels || LEGACY;
+    light.layout = ids.map((ch) => ({ pieces: ch.map((id) => light.pieces.find((p) => p.id === id)).filter(Boolean) }));
+  }
+
+  // "What's plugged in": the pieces on each channel, in wiring order.
+  function renderChannels() {
+    const bar = $("channel-bar");
+    bar.hidden = dev !== "node";
+    if (dev !== "node") return;
+    const channels = light.node ? light.node[1] : 2;
+    const ids = (light.store.node_channels || LEGACY).map((c) => [...c]);
+    while (ids.length < channels) ids.push([]);
+    const setIds = (next) => {
+      light.store.node_channels = next;
+      syncLayout();
+      selection.clear();
+      changed();
+    };
+    const rows = ids.slice(0, channels).map((ch, c) => {
+      const row = el("div", "channel-row");
+      const used = ch.reduce((t, id) => t + (light.pieces.find((p) => p.id === id)?.inner || 0) + (light.pieces.find((p) => p.id === id)?.outer || 0), 0);
+      const head = el("div", "channel-head");
+      head.append(el("span", "label", `Channel ${c + 1}`), el("span", "channel-count", `${used} / ${MAX_CHANNEL_LEDS} LEDs`));
+      row.append(head);
+      const chips = el("div", "channel-chips");
+      ch.forEach((id, i) => {
+        const p = light.pieces.find((x) => x.id === id);
+        const chip = el("span", "channel-chip", p ? p.name : id);
+        const x = el("button", "chip-x", "×");
+        x.title = "Remove";
+        x.setAttribute("aria-label", `Remove ${p ? p.name : id}`);
+        x.addEventListener("click", () => { const next = ids.map((a) => [...a]); next[c].splice(i, 1); setIds(next); });
+        chip.append(x);
+        chips.append(chip);
+      });
+      if (!ch.length) chips.append(el("span", "hint", "Nothing plugged in"));
+      const add = el("select", "channel-add");
+      add.setAttribute("aria-label", `Add to channel ${c + 1}`);
+      add.append(new Option("Add a fan or strip…", ""));
+      for (const p of light.pieces) {
+        const o = new Option(`${p.name} (${p.inner + p.outer} LEDs)`, p.id);
+        o.disabled = used + p.inner + p.outer > MAX_CHANNEL_LEDS;
+        add.append(o);
+      }
+      add.addEventListener("change", () => {
+        if (!add.value) return;
+        const next = ids.map((a) => [...a]);
+        next[c].push(add.value);
+        setIds(next);
+      });
+      row.append(chips, add);
+      return row;
+    });
+    const note = light.node && !light.node[2]
+      ? `Your ${light.node[0]} is supported from other projects' notes but hasn't been tested with Prism yet. If something looks wrong, please report it.`
+      : "Add each fan or strip in the order it's wired, starting nearest the controller.";
+    const grid = el("div", "channel-grid");
+    grid.append(...rows);
+    bar.replaceChildren(el("span", "label", "What's plugged in"), grid, el("p", "hint", note));
   }
 
   const group = (name) => groups().find(([n]) => n === name)[1];
@@ -558,13 +639,16 @@ const Lighting = (() => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const fans = [];
-    light.layout.forEach((ch, c) => {
-      const per = ch.inner + ch.outer;
-      for (let f = 0; f < ch.fans; f++) fans.push({ c, base: f * per, inner: ch.inner, outer: ch.outer });
-    });
+    const fans = pieceList();
     spots = [];
-    if (!fans.length) return;
+    if (!fans.length) {
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim();
+      ctx.font = "13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Nothing set up yet: add what's plugged in below.", w / 2, h / 2);
+      $("fan-labels").hidden = true;
+      return;
+    }
 
     const css = getComputedStyle(document.documentElement);
     const body = css.getPropertyValue("--surface").trim();
@@ -574,20 +658,21 @@ const Lighting = (() => {
     const slot = w / fans.length;
     const R = Math.min(slot, h) * 0.44;
     const marks = [];
+    const color = (fan, i) => (frame.node[fan.c] || [])[fan.base + i] || "#000000";
 
     // A ring of glowing light segments; remembers where each LED is.
     const ring = (fan, cx, cy, radius, width, first, count) => {
       const step = (Math.PI * 2) / count;
       for (let k = 0; k < count; k++) {
-        const i = fan.base + first + k;
-        const color = (frame.node[fan.c] || [])[i] || "#000000";
+        const i = first + k;
+        const c = color(fan, i);
         const a = -Math.PI / 2 + k * step;
-        ctx.strokeStyle = color;
-        ctx.shadowColor = color;
+        ctx.strokeStyle = c;
+        ctx.shadowColor = c;
         ctx.shadowBlur = 18;
         ctx.lineWidth = width;
         ctx.beginPath(); ctx.arc(cx, cy, radius, a - step * 0.46, a + step * 0.46); ctx.stroke();
-        const s = { key: key(fan.c, i), x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius, a, step, cx, cy, radius, width };
+        const s = { key: key(fan.c, fan.base + i), x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius, a, step, cx, cy, radius, width };
         spots.push(s);
         if (selection.has(s.key)) marks.push(s);
       }
@@ -596,6 +681,30 @@ const Lighting = (() => {
 
     fans.forEach((fan, n) => {
       const cx = slot * (n + 0.5), cy = h / 2;
+
+      if (fan.shape === "strip") {
+        // a bar of LEDs, top to bottom
+        const len = Math.min(h - 16, R * 2.2);
+        const step = len / fan.leds;
+        const r = Math.max(1.5, Math.min(7, step * 0.38));
+        ctx.fillStyle = body;
+        ctx.strokeStyle = edge;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.roundRect(cx - r * 2.2, cy - len / 2 - 6, r * 4.4, len + 12, r * 2); ctx.fill(); ctx.stroke();
+        for (let i = 0; i < fan.leds; i++) {
+          const y = cy - len / 2 + step * (i + 0.5);
+          const c = color(fan, i);
+          ctx.shadowColor = c;
+          ctx.shadowBlur = 14;
+          ctx.fillStyle = c;
+          ctx.beginPath(); ctx.arc(cx, y, r, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+          const s = { key: key(fan.c, fan.base + i), x: cx, y, dot: r };
+          spots.push(s);
+          if (selection.has(s.key)) marks.push(s);
+        }
+        return;
+      }
 
       // square frame with mounting holes, like a 120 mm fan
       ctx.fillStyle = body;
@@ -608,7 +717,7 @@ const Lighting = (() => {
         ctx.beginPath(); ctx.arc(cx + dx * half * 0.84, cy + dy * half * 0.84, R * 0.05, 0, Math.PI * 2); ctx.fill();
       }
 
-      ring(fan, cx, cy, R * 0.86, R * 0.1, fan.inner, fan.outer);
+      if (fan.outer) ring(fan, cx, cy, R * 0.86, R * 0.1, fan.inner, fan.outer);
 
       ctx.strokeStyle = edge;
       ctx.lineWidth = R * 0.05;
@@ -621,7 +730,7 @@ const Lighting = (() => {
 
       ctx.fillStyle = body;
       ctx.beginPath(); ctx.arc(cx, cy, R * 0.34, 0, Math.PI * 2); ctx.fill();
-      ring(fan, cx, cy, R * 0.26, R * 0.09, 0, fan.inner);
+      if (fan.inner) ring(fan, cx, cy, R * 0.26, R * 0.09, 0, fan.inner);
       ctx.fillStyle = raised;
       ctx.beginPath(); ctx.arc(cx, cy, R * 0.15, 0, Math.PI * 2); ctx.fill();
     });
@@ -631,10 +740,13 @@ const Lighting = (() => {
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(s.cx, s.cy, s.radius + s.width / 2 + 3, s.a - s.step * 0.46, s.a + s.step * 0.46);
+      if (s.dot) ctx.arc(s.x, s.y, s.dot + 3, 0, Math.PI * 2);
+      else ctx.arc(s.cx, s.cy, s.radius + s.width / 2 + 3, s.a - s.step * 0.46, s.a + s.step * 0.46);
       ctx.stroke();
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+      if (!s.dot) {
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+      }
     }
 
     if (drag && drag.moved) {
@@ -650,9 +762,11 @@ const Lighting = (() => {
 
     const labels = $("fan-labels");
     labels.hidden = false;
-    if (labels.childElementCount !== fans.length) {
+    const names = fans.map((f) => f.label).join("|");
+    if (labels.dataset.names !== names) {
+      labels.dataset.names = names;
       labels.style.gridTemplateColumns = `repeat(${fans.length}, 1fr)`;
-      labels.replaceChildren(...fans.map((_, i) => el("span", null, `Fan ${i + 1}`)));
+      labels.replaceChildren(...fans.map((f) => el("span", null, f.label)));
     }
   }
 
@@ -1177,6 +1291,7 @@ const Lighting = (() => {
     $("node-lighting").classList.toggle("gpu", dev === "gpu");
     $("node-lighting").classList.toggle("board", dev === "board");
     renderArgb();
+    renderChannels();
     $("select-label").textContent = `Select ${unit(2)}`;
     $("select-hint").textContent = {
       node: "Click LEDs in the preview, or drag a box around them. Hold Shift to add more.",
@@ -1255,7 +1370,8 @@ const Lighting = (() => {
 
   async function init() {
     const state = await invoke("get_lighting");
-    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones, catalog: state.catalog, bindingsError: state.bindings_error, mouseButtons: state.mouse_buttons, board: state.board };
+    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones, catalog: state.catalog, bindingsError: state.bindings_error, mouseButtons: state.mouse_buttons, board: state.board, pieces: state.pieces, node: state.node };
+    syncLayout();
     layerIndex = Math.max(0, stack().length - 1);
 
     $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));
@@ -1296,6 +1412,7 @@ const Lighting = (() => {
     // Changed from the tray menu (profile, bindings on/off).
     await listen("store-updated", (e) => {
       light.store = e.payload;
+      syncLayout();
       layerIndex = Math.max(0, stack().length - 1);
       hsv = null;
       renderAll();

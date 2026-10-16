@@ -83,7 +83,8 @@ function renderList() {
     const ic = el("span", "ic");
     ic.innerHTML = ICONS[d.kind] || ICONS.unknown; // fixed SVG strings, never device data
     const txt = el("span");
-    txt.append(el("span", "nm", d.name), el("span", d.recognized ? "st" : "st unknown", d.recognized ? "Connected" : "Not supported yet"));
+    const status = !d.recognized ? "Not supported yet" : d.experimental ? "Connected · Experimental" : "Connected";
+    txt.append(el("span", "nm", d.name), el("span", d.recognized && !d.experimental ? "st" : "st unknown", status));
     b.append(ic, txt);
     b.addEventListener("click", () => { selected = i; render(); });
     list.append(b);
@@ -146,7 +147,7 @@ function render() {
   if (!has) return;
   const d = devices[Math.min(selected, devices.length - 1)];
   $("dev-title").textContent = d.name;
-  $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · ${d.bus}`;
+  $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · ${d.bus}${d.experimental ? " · Experimental: not yet tested with Prism" : ""}`;
   // Fans, the graphics card and the motherboard have no buttons or onboard
   // memory, so they only get Lighting.
   const onlyLighting = ["lighting", "gpu", "motherboard"].includes(d.kind);

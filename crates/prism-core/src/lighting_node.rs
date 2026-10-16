@@ -1,4 +1,7 @@
-//! Corsair Lighting Node Pro (1b1c:0c0b).
+//! Corsair Lighting Node Pro (1b1c:0c0b) and the controllers that talk the
+//! same way: Lighting Node Core, Commander Pro (its lighting), LS100,
+//! LT100 and the 1000D and SPEC-OMEGA cases. Only the Lighting Node Pro has
+//! been tested; the others follow OpenRGB, which drives them all alike.
 //!
 //! How it talks: every message is a 64-byte HID report (plus a leading report
 //! number of 0). The first byte is the command. Replies are 16 bytes.
@@ -19,7 +22,23 @@ use hidapi::{HidApi, HidDevice};
 use crate::{find_devices, Rgb};
 
 pub const PID: u16 = 0x0c0b;
+/// Most channels any of these controllers has.
 pub const CHANNELS: u8 = 2;
+
+/// (USB product ID, name, lighting channels, tested on a real device).
+pub const MODELS: &[(u16, &str, u8, bool)] = &[
+    (0x0c0b, "Lighting Node Pro", 2, true),
+    (0x0c1a, "Lighting Node Core", 1, false),
+    (0x0c10, "Commander Pro", 2, false),
+    (0x0c1e, "LS100 Lighting Kit", 1, false),
+    (0x0c23, "LT100 Smart Lighting Towers", 2, false),
+    (0x1d00, "Obsidian 1000D", 2, false),
+    (0x1d04, "SPEC-OMEGA RGB", 2, false),
+];
+
+pub fn model(pid: u16) -> Option<(u16, &'static str, u8, bool)> {
+    MODELS.iter().copied().find(|m| m.0 == pid)
+}
 /// Most LEDs one channel can drive.
 pub const MAX_LEDS_PER_CHANNEL: usize = 204;
 /// Send a keepalive at least this often.
@@ -64,13 +83,13 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::NotFound => write!(f, "Lighting Node Pro is not connected"),
+            Error::NotFound => write!(f, "No Corsair lighting controller is connected"),
             Error::Usb(e) => write!(f, "USB error: {e}"),
             Error::NoReply(c) => write!(f, "the Lighting Node Pro did not answer command 0x{c:02x}"),
             Error::Rejected { command, status } => {
                 write!(f, "the Lighting Node Pro rejected command 0x{command:02x} (status 0x{status:02x})")
             }
-            Error::BadChannel(c) => write!(f, "channel {c} does not exist (use 0 or 1)"),
+            Error::BadChannel(c) => write!(f, "channel {} does not exist on this controller", c + 1),
             Error::TooManyLeds(n) => write!(f, "{n} LEDs is more than one channel supports ({MAX_LEDS_PER_CHANNEL})"),
         }
     }
@@ -115,22 +134,25 @@ fn direct_reports(channel: u8, colors: &[Rgb]) -> Vec<[u8; REPORT_LEN]> {
 
 pub struct LightingNode {
     dev: HidDevice,
+    /// How many lighting channels this model has.
+    channels: u8,
     /// When each channel was last switched to software control. Re-sent
     /// every keepalive interval in case the device dropped back on its own.
     software_since: Cell<[Option<Instant>; CHANNELS as usize]>,
 }
 
 impl LightingNode {
-    /// Opens the first connected Lighting Node Pro.
+    /// Opens the first connected controller of a model in [`MODELS`].
     pub fn open(api: &HidApi) -> Result<Self> {
-        let path = find_devices(api)
-            .into_iter()
-            .find(|d| d.pid == PID)
-            .and_then(|d| d.interfaces.into_iter().next())
-            .ok_or(Error::NotFound)?
-            .path;
+        let dev = find_devices(api).into_iter().find(|d| model(d.pid).is_some()).ok_or(Error::NotFound)?;
+        let channels = model(dev.pid).map_or(1, |m| m.2);
+        let path = dev.interfaces.into_iter().next().ok_or(Error::NotFound)?.path;
         let c_path = std::ffi::CString::new(path).map_err(|_| Error::NotFound)?;
-        Ok(Self { dev: api.open_path(&c_path)?, software_since: Cell::new([None; CHANNELS as usize]) })
+        Ok(Self { dev: api.open_path(&c_path)?, channels, software_since: Cell::new([None; CHANNELS as usize]) })
+    }
+
+    pub fn channels(&self) -> u8 {
+        self.channels
     }
 
     /// Treats both channels as already in software mode (Prism restarting
@@ -164,7 +186,7 @@ impl LightingNode {
     /// Shows `colors` (screen colors) on a channel (0 or 1). LED 1 is the
     /// first entry. Colors are corrected for LEDs with [`Rgb::to_led`].
     pub fn set_colors(&self, channel: u8, colors: &[Rgb]) -> Result<()> {
-        if channel >= CHANNELS {
+        if channel >= self.channels {
             return Err(Error::BadChannel(channel));
         }
         if colors.len() > MAX_LEDS_PER_CHANNEL {
@@ -186,7 +208,7 @@ impl LightingNode {
 
     /// Sets brightness for a channel, 0–100 percent.
     pub fn set_brightness(&self, channel: u8, percent: u8) -> Result<()> {
-        if channel >= CHANNELS {
+        if channel >= self.channels {
             return Err(Error::BadChannel(channel));
         }
         self.checked(cmd::BRIGHTNESS, &[channel, percent.min(100)])
@@ -199,7 +221,7 @@ impl LightingNode {
 
     /// Hands both channels back to the device's own saved effect.
     pub fn release(&self) -> Result<()> {
-        for ch in 0..CHANNELS {
+        for ch in 0..self.channels {
             self.checked(cmd::PORT_STATE, &[ch, port_state::HARDWARE])?;
         }
         self.software_since.set([None; CHANNELS as usize]);

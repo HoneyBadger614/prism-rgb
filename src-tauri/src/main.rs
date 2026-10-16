@@ -16,7 +16,8 @@ use engine::{Devices, Engine};
 use prism_core::bindings::{self, InputDevice};
 use remap::Remap;
 use hidapi::HidApi;
-use prism_core::effects::{ChannelLayout, LightingStore, Surface};
+use prism_core::effects::{self, ChannelLayout, LightingStore, PieceKind, Surface};
+use prism_core::lighting_node;
 use prism_core::k65_mini::{self, Key};
 use prism_core::asus_aura;
 use prism_core::msi_gpu;
@@ -25,15 +26,6 @@ use prism_core::{find_devices, DeviceKind, CORSAIR_VID};
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
 
-/// What's plugged into the Lighting Node Pro.
-/// Channel 1: three fans, 4 hub + 12 ring LEDs each. Channel 2: nothing (checked
-/// with `prism-light identify 2`). This will move to a settings screen.
-fn node_layout() -> Vec<ChannelLayout> {
-    vec![
-        ChannelLayout::ll_fans(3),
-        ChannelLayout::ll_fans(0),
-    ]
-}
 
 /// What the screen needs to know about one device.
 #[derive(Serialize)]
@@ -45,6 +37,8 @@ struct DeviceInfo {
     bus: String,
     kind: &'static str,
     recognized: bool,
+    /// Supported from other projects' notes, not yet checked on a real one.
+    experimental: bool,
     interfaces: usize,
 }
 
@@ -67,22 +61,22 @@ fn list_devices(state: State<AppState>) -> Result<Vec<DeviceInfo>, String> {
                 None => "unknown",
             },
             recognized: d.is_supported(),
+            experimental: d.model.is_some_and(|m| !m.tested),
             interfaces: d.interfaces.len(),
         })
         .collect();
     if let Some(g) = &state.gpu {
-        out.push(DeviceInfo { name: g.name.into(), product: g.name.into(), usb_id: String::new(), bus: format!("I2C bus {}", g.bus), kind: "gpu", recognized: true, interfaces: 1 });
+        out.push(DeviceInfo { name: g.name.into(), product: g.name.into(), usb_id: String::new(), bus: format!("I2C bus {}", g.bus), kind: "gpu", recognized: true, experimental: false, interfaces: 1 });
     }
     if state.board.is_some() && asus_aura::present(&api) {
         let name = "ASUS Aura motherboard";
-        out.push(DeviceInfo { name: name.into(), product: name.into(), usb_id: String::new(), bus: format!("USB {:04x}:{:04x}", asus_aura::ASUS_VID, asus_aura::SUPPORTED_PIDS[0]), kind: "motherboard", recognized: true, interfaces: 1 });
+        out.push(DeviceInfo { name: name.into(), product: name.into(), usb_id: String::new(), bus: format!("USB {:04x}:{:04x}", asus_aura::ASUS_VID, asus_aura::SUPPORTED_PIDS[0]), kind: "motherboard", recognized: true, experimental: false, interfaces: 1 });
     }
     Ok(out)
 }
 
 pub(crate) struct AppState {
     engine: Engine,
-    layout: Vec<ChannelLayout>,
     fans: Surface,
     keyboard: Surface,
     keys: Vec<Key>,
@@ -106,8 +100,12 @@ struct BoardInfo {
 #[derive(Serialize)]
 struct LightingState {
     store: LightingStore,
-    /// The Lighting Node Pro's fans.
+    /// What's plugged into the lighting controller's channels.
     layout: Vec<ChannelLayout>,
+    /// Fans and strips that can be plugged in.
+    pieces: &'static [PieceKind],
+    /// The connected lighting controller: (name, channels, tested).
+    node: Option<(&'static str, u8, bool)>,
     /// The K65's keys, in LED order.
     keys: Vec<Key>,
     /// The Nightsword's lighting zones, in LED order.
@@ -125,7 +123,9 @@ struct LightingState {
 fn get_lighting(state: State<AppState>) -> LightingState {
     LightingState {
         store: state.engine.config(),
-        layout: state.layout.clone(),
+        layout: effects::node_layout(&state.engine.config()),
+        pieces: effects::PIECES,
+        node: HidApi::new().ok().and_then(|api| find_devices(&api).into_iter().find_map(|d| lighting_node::model(d.pid))).map(|m| (m.1, m.2, m.3)),
         keys: state.keys.clone(),
         mouse_zones: nightsword::ZONES.iter().map(|z| z.0).collect(),
         catalog: bindings::CATALOG,
@@ -377,7 +377,6 @@ fn main() {
         .setup(move |app| {
             // ~/.config/io.github.honeybadger.prism/lighting.json
             let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
-            let layout = node_layout();
             let keys = k65_mini::keys();
             // The motherboard is opened now to learn what lights it has; the
             // engine then keeps it.
@@ -385,7 +384,7 @@ fn main() {
             let aura = HidApi::new().ok().and_then(|api| asus_aura::AsusAura::open(&api).map_err(|e| eprintln!("motherboard: {e}")).ok());
             let board = aura.as_ref().map(|a| a.layout);
             let devices = Devices {
-                fans: Surface::fans(&layout),
+                fans: effects::node_max_surface(),
                 keyboard: k65_mini::surface(&keys),
                 keys: keys.clone(),
                 mouse: nightsword::surface(),
@@ -397,7 +396,7 @@ fn main() {
             let remap = Remap::default();
             let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to, resume_at);
             remap.apply(&config, &engine);
-            app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, gpu, board, remap });
+            app.manage(AppState { engine, fans, keyboard, keys, mouse, gpu, board, remap });
             tray::create(app.handle())?;
             if !hidden {
                 tray::show_window(app.handle());

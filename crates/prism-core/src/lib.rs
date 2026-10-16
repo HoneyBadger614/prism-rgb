@@ -111,13 +111,23 @@ pub struct KnownModel {
     pub pid: u16,
     pub name: &'static str,
     pub kind: DeviceKind,
+    /// Checked on a real device. Others follow other projects' notes and
+    /// are shown as experimental.
+    pub tested: bool,
 }
 
 /// Models Prism supports (or is working towards). Matched by USB product ID.
 pub const KNOWN_MODELS: &[KnownModel] = &[
-    KnownModel { pid: 0x1baf, name: "K65 RGB Mini", kind: DeviceKind::Keyboard },
-    KnownModel { pid: 0x1b5c, name: "Nightsword RGB", kind: DeviceKind::Mouse },
-    KnownModel { pid: 0x0c0b, name: "Lighting Node Pro", kind: DeviceKind::LightingController },
+    KnownModel { pid: 0x1baf, name: "K65 RGB Mini", kind: DeviceKind::Keyboard, tested: true },
+    KnownModel { pid: 0x1b5c, name: "Nightsword RGB", kind: DeviceKind::Mouse, tested: true },
+    KnownModel { pid: 0x0c0b, name: "Lighting Node Pro", kind: DeviceKind::LightingController, tested: true },
+    // Same protocol as the Lighting Node Pro (see lighting_node::MODELS).
+    KnownModel { pid: 0x0c1a, name: "Lighting Node Core", kind: DeviceKind::LightingController, tested: false },
+    KnownModel { pid: 0x0c10, name: "Commander Pro", kind: DeviceKind::LightingController, tested: false },
+    KnownModel { pid: 0x0c1e, name: "LS100 Lighting Kit", kind: DeviceKind::LightingController, tested: false },
+    KnownModel { pid: 0x0c23, name: "LT100 Smart Lighting Towers", kind: DeviceKind::LightingController, tested: false },
+    KnownModel { pid: 0x1d00, name: "Obsidian 1000D", kind: DeviceKind::LightingController, tested: false },
+    KnownModel { pid: 0x1d04, name: "SPEC-OMEGA RGB", kind: DeviceKind::LightingController, tested: false },
 ];
 
 /// Whether the Prism app is running. The test tools refuse to talk to devices
@@ -211,6 +221,14 @@ mod tests {
         assert_eq!(lookup_model(0x1b5c).unwrap().kind, DeviceKind::Mouse);
         assert_eq!(lookup_model(0x0c0b).unwrap().kind, DeviceKind::LightingController);
         assert!(lookup_model(0x0000).is_none());
+    }
+
+    #[test]
+    fn lighting_controllers_match_the_driver() {
+        for m in lighting_node::MODELS {
+            let k = lookup_model(m.0).expect("listed");
+            assert_eq!((k.name, k.kind, k.tested), (m.1, DeviceKind::LightingController, m.3));
+        }
     }
 
     #[test]

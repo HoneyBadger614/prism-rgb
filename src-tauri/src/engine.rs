@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
-use prism_core::effects::{onboard_lights, render_layers, Layer, LightingStore, OnboardLight, Profile, Surface};
+use prism_core::effects::{node_layout, onboard_lights, render_layers, Layer, LightingStore, OnboardLight, Profile, Surface};
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
-use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
+use prism_core::lighting_node::{LightingNode, KEEPALIVE_INTERVAL};
 use prism_core::nightsword::{self, Nightsword};
 use prism_core::Rgb;
 use serde::Serialize;
@@ -99,6 +99,8 @@ struct Frame<'a> {
 
 /// The devices Prism drives, plus how they're laid out.
 pub struct Devices {
+    /// Every LED a lighting controller could have (for checking settings);
+    /// the real layout comes from the settings.
     pub fans: Surface,
     pub keyboard: Surface,
     pub keys: Vec<Key>,
@@ -174,6 +176,7 @@ impl Engine {
             let mut aura: Link<AsusAura> = Link { dev: devices.aura, last_try: None };
             let one_led = Surface::grid(&[(0.0, 0.0)]);
             let mut board_cache: Option<(Vec<u16>, Surface)> = None;
+            let mut fans_cache: Option<(Option<Vec<Vec<String>>>, Surface)> = None;
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
             // DPI: what's been sent to the mouse, the stage it's on, and
@@ -193,7 +196,10 @@ impl Engine {
                 // blanks its lights until colors arrive.
                 let t = start.elapsed().as_secs_f64();
                 let profile = cfg.active_profile().unwrap_or(&empty);
-                let fans = render_layers(&profile.layers, &devices.fans, cfg.brightness, t);
+                if fans_cache.as_ref().map_or(true, |(n, _)| *n != cfg.node_channels) {
+                    fans_cache = Some((cfg.node_channels.clone(), Surface::fans(&node_layout(&cfg))));
+                }
+                let fans = render_layers(&profile.layers, &fans_cache.as_ref().unwrap().1, cfg.brightness, t);
                 let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
                 let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
                 let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
@@ -218,13 +224,13 @@ impl Engine {
                         return Some(n);
                     }
                     // We do brightness ourselves, so the device stays at full.
-                    (0..CHANNELS).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
+                    (0..n.channels()).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
                 });
                 if let Some(n) = &node.dev {
                     let sent = fans
                         .iter()
                         .enumerate()
-                        .filter(|(_, colors)| !colors.is_empty())
+                        .filter(|(ch, colors)| !colors.is_empty() && (*ch as u8) < n.channels())
                         .all(|(ch, colors)| n.set_colors(ch as u8, colors).is_ok());
                     if !sent {
                         node.dev = None; // unplugged, or something else took it over

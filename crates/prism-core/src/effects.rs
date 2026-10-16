@@ -150,49 +150,136 @@ pub struct LightingStore {
     /// How many LEDs are plugged into each motherboard ARGB header.
     #[serde(default)]
     pub argb_leds: Vec<u16>,
+    /// What's plugged into each lighting controller channel (piece ids, in
+    /// wiring order). None in settings from before this existed: those get
+    /// [`legacy_layout`].
+    #[serde(default)]
+    pub node_channels: Option<Vec<Vec<String>>>,
 }
 
 fn yes() -> bool {
     true
 }
 
-/// What's plugged into one channel: a chain of identical fans. Each fan has
-/// an inner ring of LEDs around the hub and an outer ring, wired inner first.
+/// How a piece's LEDs are arranged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shape {
+    /// Rings: an inner ring around the hub (if any), then an outer ring.
+    Fan,
+    /// A line of LEDs.
+    Strip,
+}
+
+/// Something that plugs into a lighting controller channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PieceKind {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// LEDs around the center (fans), wired first.
+    pub inner: usize,
+    /// LEDs on the outer ring (fans) or along the strip.
+    pub outer: usize,
+    pub shape: Shape,
+}
+
+impl PieceKind {
+    pub fn leds(&self) -> usize {
+        self.inner + self.outer
+    }
+}
+
+const fn fan(id: &'static str, name: &'static str, inner: usize, outer: usize) -> PieceKind {
+    PieceKind { id, name, inner, outer, shape: Shape::Fan }
+}
+
+const fn strip(id: &'static str, name: &'static str, leds: usize) -> PieceKind {
+    PieceKind { id, name, inner: 0, outer: leds, shape: Shape::Strip }
+}
+
+/// Everything Prism knows how to lay out, with LED counts from OpenLinkHub's
+/// device lists. Only LL fans have been checked on a real device.
+pub const PIECES: &[PieceKind] = &[
+    fan("ll", "LL RGB fan", 4, 12),
+    fan("ql", "QL RGB fan", 0, 34),
+    fan("hd", "HD RGB fan", 0, 12),
+    fan("ml", "ML PRO RGB fan", 0, 4),
+    fan("8led", "8-LED fan (SP RGB Elite, ...)", 0, 8),
+    fan("sp", "SP RGB fan (1 LED)", 0, 1),
+    strip("strip", "RGB LED strip", 10),
+    strip("ls100-250", "LS100 strip 250 mm", 15),
+    strip("ls100-350", "LS100 strip 350 mm", 21),
+    strip("ls100-450", "LS100 strip 450 mm", 27),
+    strip("ls100-1400", "LS100 strip 1.4 m", 84),
+    strip("lc100", "LC100 triangle", 9),
+    fan("xd7", "XD7 pump/reservoir", 0, 36),
+    fan("xd5", "XD5 pump/reservoir", 0, 10),
+    fan("xd3", "XD3 pump/reservoir", 0, 16),
+    fan("cx7", "XC7 / XC9 CPU block", 0, 16),
+    fan("xc5", "XC5 PRO / XC8 PRO CPU block", 0, 8),
+    fan("gpu-block", "GPU water block", 0, 16),
+];
+
+pub fn piece(id: &str) -> Option<&'static PieceKind> {
+    PIECES.iter().find(|p| p.id == id)
+}
+
+/// What's plugged into one channel, in wiring order.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelLayout {
-    pub fans: usize,
-    /// LEDs around the center hub.
-    pub inner: usize,
-    /// LEDs on the outer ring.
-    pub outer: usize,
+    pub pieces: Vec<&'static PieceKind>,
 }
 
 impl ChannelLayout {
-    /// Corsair LL-style fans: 4 LEDs in the hub, 12 on the ring.
-    pub const fn ll_fans(fans: usize) -> Self {
-        Self { fans, inner: 4, outer: 12 }
+    /// Corsair LL fans: 4 LEDs in the hub, 12 on the ring.
+    pub fn ll_fans(fans: usize) -> Self {
+        Self { pieces: vec![&PIECES[0]; fans] }
     }
 
-    pub fn leds_per_fan(&self) -> usize {
-        self.inner + self.outer
+    pub fn from_ids(ids: &[String]) -> Self {
+        Self { pieces: ids.iter().filter_map(|id| piece(id)).collect() }
     }
 
     pub fn leds(&self) -> usize {
-        self.fans * self.leds_per_fan()
+        self.pieces.iter().map(|p| p.leds()).sum()
     }
 }
 
-/// Every hub LED (`inner = true`) or every outer-ring LED.
+/// Every hub LED (`inner = true`) or every outer-ring LED of every fan.
 pub fn ring_leds(layout: &[ChannelLayout], inner: bool) -> Vec<LedRef> {
     let mut out = Vec::new();
     for (c, ch) in layout.iter().enumerate() {
-        for i in 0..ch.leds() {
-            if (i % ch.leds_per_fan() < ch.inner) == inner {
-                out.push(LedRef(c as u8, i as u16));
+        let mut i = 0;
+        for p in &ch.pieces {
+            for j in 0..p.leds() {
+                if p.shape == Shape::Fan && (j < p.inner) == inner {
+                    out.push(LedRef(c as u8, (i + j) as u16));
+                }
             }
+            i += p.leds();
         }
     }
     out
+}
+
+/// The layout Prism used before channels could be set up: three LL fans
+/// on channel 1 (the setup it was first built on).
+pub fn legacy_layout() -> Vec<ChannelLayout> {
+    vec![ChannelLayout::ll_fans(3), ChannelLayout::ll_fans(0)]
+}
+
+/// The lighting controller's channels from saved settings.
+pub fn node_layout(store: &LightingStore) -> Vec<ChannelLayout> {
+    match &store.node_channels {
+        Some(chs) => chs.iter().map(|c| ChannelLayout::from_ids(c)).collect(),
+        None => legacy_layout(),
+    }
+}
+
+/// Any LED a lighting controller could have, so changing what's plugged in
+/// doesn't throw away selections.
+pub fn node_max_surface() -> Surface {
+    Surface::strips(&[crate::lighting_node::MAX_LEDS_PER_CHANNEL; crate::lighting_node::CHANNELS as usize])
 }
 
 /// Where one LED sits, as effects see it, in two directions:
@@ -223,29 +310,41 @@ fn there_and_back(u: f64) -> f64 {
 }
 
 impl Surface {
-    /// Fans on a Lighting Node Pro.
+    /// Fans and strips on a lighting controller. "Across" runs over every
+    /// piece in turn; the second direction goes round each fan (or along
+    /// each strip) on its own.
     pub fn fans(layout: &[ChannelLayout]) -> Self {
-        let total_fans: usize = layout.iter().map(|c| c.fans).sum();
+        let total: usize = layout.iter().map(|c| c.pieces.len()).sum();
+        let total_f = total.max(1) as f64;
         let mut leds = Vec::new();
-        let mut first_fan = 0;
+        let mut n = 0;
         for ch in layout {
-            let per = ch.leds_per_fan().max(1);
-            for i in 0..ch.leds() {
-                let j = i % per;
-                let (k, ring_len) = if j < ch.inner { (j, ch.inner) } else { (j - ch.inner, ch.outer) };
-                let fan = first_fan + i / per;
-                let around = k as f64 / ring_len.max(1) as f64;
-                // across: reach color 2 exactly on the last fan's last LED
-                let steps = (total_fans.max(1) * ring_len) as f64 - 1.0;
-                let across = if steps > 0.0 { (fan * ring_len + k) as f64 / steps } else { 0.0 };
-                leds.push(LedGeom {
-                    lin: [across, there_and_back(around)],
-                    cyc: [(fan as f64 + around) / total_fans.max(1) as f64, around],
-                });
+            for p in &ch.pieces {
+                for j in 0..p.leds() {
+                    let (k, len) = if j < p.inner { (j, p.inner) } else { (j - p.inner, p.outer) };
+                    let geom = match p.shape {
+                        Shape::Fan => {
+                            let around = k as f64 / len.max(1) as f64;
+                            // reach color 2 exactly on the last piece's last LED
+                            let end = if len > 1 { k as f64 / (len - 1) as f64 } else { 1.0 };
+                            LedGeom { lin: [(n as f64 + end) / total_f, there_and_back(around)], cyc: [(n as f64 + around) / total_f, around] }
+                        }
+                        Shape::Strip => {
+                            let along = if len > 1 { k as f64 / (len - 1) as f64 } else { 0.0 };
+                            let cyc = k as f64 / len.max(1) as f64;
+                            LedGeom { lin: [(n as f64 + along) / total_f, along], cyc: [(n as f64 + cyc) / total_f, cyc] }
+                        }
+                    };
+                    leds.push(geom);
+                }
+                n += 1;
             }
-            first_fan += ch.fans;
         }
-        Self { channels: layout.iter().map(ChannelLayout::leds).collect(), leds, laps: [total_fans.max(1) as f64, 1.0] }
+        // The very first LED starts the fade.
+        if let Some(first) = leds.first_mut() {
+            first.lin[0] = 0.0;
+        }
+        Self { channels: layout.iter().map(ChannelLayout::leds).collect(), leds, laps: [total_f, 1.0] }
     }
 
     /// LEDs on a flat grid, like keys on a keyboard. `points` are (x, y)
@@ -335,7 +434,7 @@ impl LightingStore {
             gpu: default_device_layers(),
             motherboard: default_device_layers(),
         };
-        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true, argb_leds: vec![] }
+        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true, argb_leds: vec![], node_channels: Some(vec![vec![], vec![]]) }
     }
 
     /// Fixes anything out of range: numbers, names, too many profiles or
@@ -343,6 +442,18 @@ impl LightingStore {
     pub fn sanitized(mut self, fans: &Surface, keyboard: &Surface, mouse: &Surface) -> Self {
         self.brightness = self.brightness.min(100);
         self.argb_leds.truncate(8);
+        if let Some(chs) = &mut self.node_channels {
+            chs.truncate(crate::lighting_node::CHANNELS as usize);
+            for ch in chs.iter_mut() {
+                ch.retain(|id| piece(id).is_some());
+                // Drop pieces past what one channel can drive.
+                let mut leds = 0;
+                ch.retain(|id| {
+                    leds += piece(id).map_or(0, |p| p.leds());
+                    leds <= crate::lighting_node::MAX_LEDS_PER_CHANNEL
+                });
+            }
+        }
         for n in &mut self.argb_leds {
             *n = (*n).min(crate::asus_aura::MAX_ARGB_LEDS as u16);
         }
@@ -505,7 +616,7 @@ mod tests {
     }
 
     fn one(layer: Layer) -> LightingStore {
-        LightingStore { active: 0, brightness: 100, bindings_on: true, argb_leds: vec![], profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }] }
+        LightingStore { active: 0, brightness: 100, bindings_on: true, argb_leds: vec![], node_channels: None, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }] }
     }
 
     fn fx(effect: Effect, spread: Spread) -> Layer {
@@ -594,7 +705,7 @@ mod tests {
             active: 0,
             brightness: 100,
             bindings_on: true,
-            argb_leds: vec![],
+            argb_leds: vec![], node_channels: None,
             profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }],
         };
         let f = render(&hub_ring, &layout, 1.0);
@@ -635,7 +746,7 @@ mod tests {
             active: 99,
             brightness: 200,
             bindings_on: true,
-            argb_leds: vec![],
+            argb_leds: vec![], node_channels: None,
             profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }],
         }
         .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
@@ -646,7 +757,7 @@ mod tests {
         assert_eq!((l.brightness, l.speed, l.name.as_str()), (100, 1, "Layer"));
         assert_eq!(l.target, Target::Leds { leds: vec![LedRef(0, 47)] });
 
-        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true, argb_leds: vec![] }
+        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true, argb_leds: vec![], node_channels: None }
             .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert!(!empty.profiles.is_empty());
     }
@@ -689,6 +800,33 @@ mod tests {
         let l = onboard_lights(&[base, pulse, fixed], &kb, 100, 0.0);
         assert_eq!(l, vec![OnboardLight::Rainbow(0), OnboardLight::Pulse(1, PURPLE, HOT_PINK), OnboardLight::Steady(WHITE)]);
         assert_eq!(onboard_lights(&[], &kb, 100, 0.0)[0], OnboardLight::Steady(BLACK));
+    }
+
+    #[test]
+    fn mixed_pieces_and_saved_channels() {
+        let ch = ChannelLayout::from_ids(&["ql".into(), "strip".into(), "nope".into()]);
+        assert_eq!(ch.leds(), 44);
+        let s = Surface::fans(&[ch]);
+        let f = render_layers(&[fx(Effect::Gradient, Spread::Across)], &s, 100, 0.0);
+        assert_eq!((f[0][0], f[0][43]), (PURPLE, HOT_PINK));
+        // along the strip on its own: first and last LED
+        let along = render_layers(&[fx(Effect::Gradient, Spread::PerFan)], &s, 100, 0.0);
+        assert_eq!((along[0][34], along[0][43]), (PURPLE, HOT_PINK));
+        // no hub LEDs on a QL or a strip
+        assert!(ring_leds(&[ChannelLayout::from_ids(&["ql".into(), "strip".into()])], true).is_empty());
+
+        // Old settings keep the original 3 LL fans; new ones start empty.
+        let old: LightingStore = serde_json::from_str(r#"{"active":0,"brightness":80,"profiles":[{"name":"Mine","layers":[]}]}"#).unwrap();
+        assert_eq!(node_layout(&old)[0].leds(), 48);
+        assert_eq!(node_layout(&LightingStore::starter())[0].leds(), 0);
+
+        // Too many LEDs for a channel: the extra pieces are dropped.
+        let mut store = LightingStore::starter();
+        store.node_channels = Some(vec![vec!["lc100".into(); 30], vec!["xx".into()], vec!["ll".into()]]);
+        let k = Surface::grid(&[(0.0, 0.0)]);
+        let store = store.sanitized(&node_max_surface(), &k, &k);
+        let chs = store.node_channels.unwrap();
+        assert_eq!((chs.len(), chs[0].len(), chs[1].len()), (2, 22, 0));
     }
 
     #[test]

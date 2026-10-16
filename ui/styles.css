@@ -462,3 +462,14 @@ select.text-input { width: 100%; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+
+.channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.channel-row { display: flex; flex-direction: column; gap: 8px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.channel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.channel-count { font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.channel-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.channel-chips .hint { padding: 3px 0; }
+.channel-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; font-size: 12px; background: var(--raised); border: 1px solid var(--line); border-radius: 999px; padding: 3px 4px 3px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-x { flex: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 5px; border-radius: 999px; }
+.chip-x:hover { color: var(--text); background: var(--surface); }
+.channel-add { width: 100%; min-width: 0; font-size: 12px; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }

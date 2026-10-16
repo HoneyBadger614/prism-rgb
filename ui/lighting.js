@@ -436,7 +436,7 @@ const Lighting = (() => {
     const l = layer();
     $("fx-title").textContent = mode === "add" ? "Add effect" : "Change effect";
     $("fx-sub").textContent = mode === "add"
-      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)}` : `all ${unit(2)}`}.`
+      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)} (Key glow and Typing ripple: all ${unit(2)})` : `all ${unit(2)}`}.`
       : `For the layer “${l.name}”. Its colors and LEDs stay the same.`;
     const combos = { node: COMBOS, keyboard: KEY_COMBOS, mouse: MOUSE_COMBOS }[dev] || [];
     $("fx-combos-wrap").hidden = mode !== "add" || !combos.length;
@@ -455,7 +455,10 @@ const Lighting = (() => {
           hsv = null;
           editLayer(keep);
         } else {
-          const target = selection.size ? ledsTarget([...selection]) : { kind: "all" };
+          // Effects that react to typing start on everything; others on the
+          // selection, if there is one.
+          const reacts = k === "ripple" || k === "key-glow";
+          const target = selection.size && !reacts ? ledsTarget([...selection]) : { kind: "all" };
           pushLayers([newLayer(k, { target })]);
         }
       });

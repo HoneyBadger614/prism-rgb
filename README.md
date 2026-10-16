@@ -149,21 +149,87 @@ safe list, using only the address and lighting registers known for that card.
 
 ---
 
-## Install (from source)
+## Install
 
-You need Rust, `hidapi` and `webkit2gtk-4.1`. On Arch:
+### The installer (recommended, any distribution)
 
 ```sh
-sudo pacman -S rust hidapi webkit2gtk-4.1
-git clone <this repository> prism && cd prism
-cargo build --release -p prism-rgb   # about 2 minutes
-scripts/install-desktop.sh           # adds Prism to your app launcher, with its icon
+git clone https://github.com/HoneyBadger614/prism-rgb.git
+cd prism-rgb
+./install.sh
 ```
 
-### Device permissions (once)
+The installer explains each step and asks before doing it:
 
-Prism never runs as root. Instead, a udev rule lets the person logged in at
-the computer use the devices Prism controls:
+1. **System packages** Prism needs to build, using your distribution's
+   package manager (asks for your password).
+2. **Rust**, if yours is missing or too old, from the official rustup.rs,
+   for your user only.
+3. **Build** Prism (a few minutes the first time).
+4. **Install for your user:** to `~/.local/bin`, with an app menu entry and
+   icon.
+5. **Device permissions:** a udev rule, so Prism never needs root (asks for
+   your password; details below).
+
+To **update**, run `git pull` and then `./install.sh` again.
+To **remove** Prism, run `./install.sh --uninstall` (keeps your settings
+and backups) or `./install.sh --purge` (removes everything).
+
+| Distribution | Installer |
+|---|---|
+| Arch, Manjaro, EndeavourOS, CachyOS, Garuda | ✓ tested on Arch |
+| Ubuntu 22.04+, Debian 12+, Linux Mint, Pop!_OS, Zorin, elementary, KDE neon | package list from Tauri's guide, not yet tested |
+| Fedora, Nobara | package list from Tauri's guide, not yet tested |
+| openSUSE | package list from Tauri's guide, not yet tested |
+| Anything else | install the equivalent packages yourself, then `./install.sh --no-deps` |
+
+If it fails on your distribution, please open an issue with the error, or
+better, the fix.
+
+### Ready-made packages
+
+Each release on the [Releases page](https://github.com/HoneyBadger614/prism-rgb/releases)
+has packages built on Ubuntu 22.04:
+
+- **`.deb`** for Ubuntu, Debian, Mint and Pop!_OS:
+  `sudo apt install ./Prism_*_amd64.deb`
+- **`.rpm`** for Fedora and openSUSE:
+  `sudo dnf install ./Prism-*.x86_64.rpm`
+- **AppImage** for anything else: make it executable and run it. You also
+  need `hidapi` installed, and the udev rule installed by hand (below).
+
+The `.deb` and `.rpm` install the device permission rule for you; unplug
+and replug your devices afterwards. (Until the first release is published,
+use the installer.)
+
+### By hand
+
+If you'd rather see every step, here are the build packages for each
+distribution.
+
+```sh
+# Arch
+sudo pacman -S --needed base-devel rust webkit2gtk-4.1 hidapi libappindicator librsvg
+# Ubuntu / Debian / Mint / Pop!_OS (then install Rust from https://rustup.rs)
+sudo apt install build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libhidapi-dev libudev-dev libxdo-dev
+# Fedora (then install Rust from https://rustup.rs)
+sudo dnf install gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel \
+  libappindicator-gtk3-devel librsvg2-devel hidapi-devel systemd-devel libxdo-devel
+```
+
+Then build Prism and add it to your app menu:
+
+```sh
+cargo build --release -p prism-rgb
+scripts/install-desktop.sh   # menu entry pointing at target/release (handy while developing)
+```
+
+### Device permissions
+
+Prism never runs as root. A udev rule lets the person logged in at the
+computer use the devices Prism controls. The installer and the packages set
+it up; to do it by hand:
 
 ```sh
 sudo install -Dm644 packaging/60-prism.rules /etc/udev/rules.d/60-prism.rules

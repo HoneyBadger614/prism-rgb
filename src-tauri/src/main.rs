@@ -350,6 +350,12 @@ async fn report_facts(usb_id: String) -> Result<report::Facts, String> {
     tauri::async_runtime::spawn_blocking(move || report::facts(vid, pid)).await.map_err(|e| e.to_string())?
 }
 
+/// Read-only facts about lighting hardware that isn't a Corsair USB device.
+#[tauri::command]
+async fn report_other_hardware() -> Result<report::OtherHardware, String> {
+    tauri::async_runtime::spawn_blocking(report::other_hardware).await.map_err(|e| e.to_string())?
+}
+
 /// Starts recording presses from one device (the report's button walk).
 #[tauri::command]
 fn report_capture_start(state: State<AppState>, usb_id: String) -> Result<(), String> {
@@ -521,6 +527,7 @@ fn main() {
             delete_backup,
             start_view,
             report_facts,
+            report_other_hardware,
             report_capture_start,
             report_capture_stop,
             report_light_mouse,

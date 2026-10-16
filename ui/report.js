@@ -309,9 +309,124 @@ const Report = (() => {
     update();
   }
 
-  function init() {
-    $("report-overlay").addEventListener("click", (e) => { if (e.target === $("report-overlay")) close(); });
+  /* ---------- other RGB hardware (read-only, no tests) ---------- */
+
+  let other = null;   // what was found
+  let picked = null;  // which items to include
+
+  function openOther() {
+    device = { name: "other RGB hardware", usb_id: "other", kind: "other", recognized: false };
+    other = null;
+    $("report-overlay").hidden = false;
+    otherIntro();
   }
 
-  return { init, open };
+  function otherIntro() {
+    frame("Report other RGB hardware", "Step 1 of 3", [
+      el("p", "report-text", "This makes a report about lighting hardware that isn't a Corsair USB device, such as your graphics card, motherboard lighting or another brand's keyboard or mouse, so support for it can be added. You'll see every piece before it's saved, and you choose what's included."),
+      el("p", "report-strong", "Prism only reads what Linux already knows. Nothing is sent to any of the hardware, and Prism never sends the report anywhere: it saves a file, and you decide whether to share it."),
+      el("span", "label", "What it can include"),
+      list([
+        "USB devices from makers that often have lighting (ASUS, MSI, Gigabyte, NZXT, Razer, Logitech, SteelSeries and others): USB ID, product name, maker, and how each describes its messages.",
+        "Graphics cards: their PCI IDs (chip maker and model, board maker and model) and the names of their I2C buses.",
+        "Your motherboard's maker and model name.",
+        "The names of the motherboard's internal buses (for example \"SMBus PIIX4\"). Nothing on them is probed.",
+        "Prism and Linux versions, and any notes you add.",
+      ]),
+      el("span", "label", "Never included"),
+      list([
+        "Serial numbers (removed), or your computer's unique ID.",
+        "Your name, username, computer name, files or folders.",
+        "Anything you type, or anything about your network.",
+        "Anything found by probing buses or sending commands: Prism doesn't do either here.",
+      ]),
+    ], [button("btn", "Start", otherFound), button("mini", "Cancel", close)]);
+  }
+
+  async function otherFound() {
+    frame("What Prism found", "Step 2 of 3 · read from Linux only", [el("p", "hint", "Looking…")], []);
+    if (!other) {
+      try {
+        other = await invoke("report_other_hardware");
+      } catch (e) {
+        frame("What Prism found", "Step 2 of 3", [el("p", "report-text", `Couldn't look: ${e}`)], [button("mini", "Close", close)]);
+        return;
+      }
+      picked = { usb: other.usb_devices.map(() => true), gpu: other.graphics_cards.map(() => true), board: !!other.motherboard, buses: true, linux: true };
+    }
+    const box = el("div", "report-toggles");
+    const item = (label, sub, get, set) => {
+      const l = el("label", "report-toggle report-item");
+      const c = el("input");
+      c.type = "checkbox";
+      c.checked = get();
+      c.addEventListener("change", () => set(c.checked));
+      const t = el("span");
+      t.append(el("span", "report-item-name", label), el("span", "hint", sub));
+      l.append(c, t);
+      box.append(l);
+    };
+    other.usb_devices.forEach((d, i) => item(`${d.product || "USB device"} (${d.usb_id})`, `USB · ${d.maker_guess} · ${d.interfaces.length} interface(s)`, () => picked.usb[i], (v) => (picked.usb[i] = v)));
+    other.graphics_cards.forEach((g, i) => item(`Graphics card ${g.pci_id}, board ${g.subsystem_id}`, g.prism_supports ? "Already supported by Prism" : `${g.i2c_buses.length} I2C bus(es)`, () => picked.gpu[i], (v) => (picked.gpu[i] = v)));
+    if (other.motherboard) item(`Motherboard: ${other.motherboard.maker} ${other.motherboard.model}`, "Maker and model name only", () => picked.board, (v) => (picked.board = v));
+    if (other.system_buses.length) item("Motherboard bus names", other.system_buses.join(", "), () => picked.buses, (v) => (picked.buses = v));
+    item(`Linux version (${other.linux_version})`, "Helps if a problem depends on the Linux version", () => picked.linux, (v) => (picked.linux = v));
+    const nothing = !other.usb_devices.length && !other.graphics_cards.length && !other.motherboard;
+    frame("What Prism found", "Step 2 of 3 · read from Linux only", [
+      el("p", "report-text", nothing ? "Prism didn't find any lighting hardware it could report." : "Untick anything you'd rather leave out. Pick at least the hardware you'd like supported."),
+      box,
+    ], [button("btn", "Next", otherReview), button("mini", "Back", otherIntro)]);
+  }
+
+  function buildOther(notes) {
+    const r = { prism_hardware_report: 1, prism_version: other.prism_version };
+    if (picked.linux) r.linux_version = other.linux_version;
+    r.usb_devices = other.usb_devices.filter((_, i) => picked.usb[i]);
+    r.graphics_cards = other.graphics_cards.filter((_, i) => picked.gpu[i]);
+    if (picked.board && other.motherboard) r.motherboard = other.motherboard;
+    if (picked.buses && other.system_buses.length) r.system_buses = other.system_buses;
+    if (notes.trim()) r.notes = notes.trim().slice(0, 2000);
+    return r;
+  }
+
+  function otherReview() {
+    const notes = el("textarea", "report-notes");
+    notes.placeholder = "Optional: which of these has lighting you'd like supported, and anything else that helps.";
+    notes.maxLength = 2000;
+    const pre = el("pre", "report-json");
+    const update = () => { pre.textContent = JSON.stringify(buildOther(notes.value), null, 2); };
+    notes.addEventListener("input", update);
+    const status = el("p", "hint", "");
+    const save = button("btn", "Save report", async () => {
+      save.disabled = true;
+      try {
+        const path = await invoke("report_save", { json: JSON.stringify(buildOther(notes.value)), usbId: "other" });
+        frame("Saved", "Nothing has been sent anywhere", [
+          el("p", "report-text", "Your report is saved as:"),
+          el("p", "report-path", path),
+          el("p", "report-text", "To share it, open a new issue on Prism's GitHub page and drag the file into it. You can also delete the file if you change your mind."),
+        ], [
+          button("btn", "Open the GitHub issue page", () => invoke("report_open_issue", { product: "other RGB hardware" }).catch(() => {})),
+          button("mini", "Done", close),
+        ]);
+      } catch (e) {
+        status.textContent = `Couldn't save: ${e}`;
+        save.disabled = false;
+      }
+    });
+    frame("Review your report", "Step 3 of 3 · this is exactly what will be saved", [
+      el("p", "report-text", "The text below is the complete file, word for word. Go back to untick anything."),
+      notes,
+      pre,
+      status,
+    ], [save, button("mini", "Back", otherFound), button("mini", "Cancel", close)]);
+    update();
+  }
+
+  function init() {
+    $("report-overlay").addEventListener("click", (e) => { if (e.target === $("report-overlay")) close(); });
+    $("report-other").addEventListener("click", openOther);
+  }
+
+  return { init, open, openOther };
 })();

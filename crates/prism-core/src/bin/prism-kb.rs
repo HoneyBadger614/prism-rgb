@@ -59,22 +59,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let arg = args.next().ok_or("give a file number, e.g. 6d6a")?;
         let id = u16::from_str_radix(arg.trim_start_matches("0x"), 16).map_err(|_| format!("'{arg}' isn't a file number"))?;
         let data = std::fs::read(args.next().ok_or("give a file to write")?)?;
-        let kb = K65Mini::open_with(&api, false)?;
+        let kb = K65Mini::open_with(&api, true)?; // files only open to the program in control
         kb.write_file(id, &data)?;
         let after = kb.read_file(id)?;
         println!("wrote file {id:#06x}: now {}", hex(&after));
+        kb.release()?;
         return Ok(());
     }
     if what == "rewrite" {
         let arg = args.next().ok_or("give a file number, e.g. 6d6a")?;
         let id = u16::from_str_radix(arg.trim_start_matches("0x"), 16).map_err(|_| format!("'{arg}' isn't a file number"))?;
-        let kb = K65Mini::open_with(&api, false)?;
+        let kb = K65Mini::open_with(&api, true)?; // files only open to the program in control
         let before = kb.read_file(id)?;
         println!("read file {id:#06x}: {} bytes: {}", before.len(), hex(&before));
         kb.write_file(id, &before)?;
         let after = kb.read_file(id)?;
         println!("wrote it back; read again: {} bytes", after.len());
         println!("{}", if after == before { "IDENTICAL: writing works" } else { "DIFFERENT!" });
+        kb.release()?;
         return Ok(());
     }
     let kb = K65Mini::open(&api)?;

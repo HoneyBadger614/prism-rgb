@@ -15,8 +15,9 @@
 //! - one action file per bound key:
 //!   key or combo: `6e 07 01 00 00 00 00 00`, then 01 + a USB key code, or
 //!   02 + several USB key codes held together.
-//!   macro: `ac 30 02 00` + 12 zeros, then 2-byte steps: [01, code] press,
-//!   [02, code] release, [0c, ms] wait (up to 255 ms), and `00 00` to end.
+//!   macro: `ac 30`, the number of key taps (u16), 12 zeros, then per tap
+//!   [01, code] press, [0c, ms] hold, [02, code] release, [0c, ms] gap
+//!   (no gap after the last), and `00 00` to end. See [`macro_file`].
 
 use crate::bindings::{ActionDef, BindingDef, InputDevice, MacroStep, PlayMode};
 use crate::k65_mini::Key;
@@ -25,7 +26,8 @@ const ROOT_TAG: [u8; 2] = [0x1e, 0xf1];
 const KEYS_TAG: [u8; 2] = [0x3d, 0xac];
 const FLAGS_TAG: [u8; 2] = [0xaf, 0x0b];
 const ACTION_HEAD: [u8; 8] = [0x6e, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
-const MACRO_HEAD: [u8; 16] = [0xac, 0x30, 0x02, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// Bytes 2-3 are the number of taps (filled in per macro).
+const MACRO_HEAD: [u8; 16] = [0xac, 0x30, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const KIND_KEY: u8 = 0x61;
 const KIND_MACRO: u8 = 0x31;
 const BOUND: u8 = 0x3a;
@@ -146,8 +148,9 @@ pub fn is_flags(f: &[u8]) -> bool {
 pub enum Saved {
     Key(u16),
     Combo(Vec<u16>),
-    /// A macro with this many key presses.
-    Macro(usize),
+    /// A macro with this many key taps; `shortened` if a hold or gap was
+    /// longer than the keyboard can store.
+    Macro { taps: usize, shortened: bool },
 }
 
 /// What saving a profile's keyboard bindings would write.
@@ -200,13 +203,16 @@ pub fn plan(bindings: &[BindingDef], keys: &[Key]) -> KbPlan {
                     "repeating macros need Prism running"
                 } else {
                     match macro_file(steps) {
-                        Some((f, presses)) => {
+                        Ok((f, taps, shortened)) => {
                             plan.actions.push((slot, f, KIND_MACRO));
-                            plan.saved.push((k.label, Saved::Macro(presses)));
+                            plan.saved.push((k.label, Saved::Macro { taps, shortened }));
                             done.push(slot);
                             continue;
                         }
-                        None => "this macro has a key (or a mouse button) the keyboard can't play yet",
+                        Err(MacroProblem::HeldModifier) => "this macro holds Ctrl, Shift, Alt or Win while pressing another key, which the keyboard can't play",
+                        Err(MacroProblem::UnknownKey) => "this macro has a key (or a mouse button) the keyboard can't play yet",
+                        Err(MacroProblem::Empty) => "this macro doesn't press any keys",
+                        Err(MacroProblem::TooLong) => "this macro is too long for the keyboard",
                     }
                 }
             }
@@ -227,56 +233,78 @@ pub fn action_file(codes: &[u8]) -> Vec<u8> {
     f
 }
 
-/// A macro file, and how many key presses it has. Waits between key steps
-/// are added up (longer ones become several wait steps); any key still held
-/// at the end is released.
-pub fn macro_file(steps: &[MacroStep]) -> Option<(Vec<u8>, usize)> {
-    let mut out: Vec<[u8; 2]> = Vec::new();
-    let mut held: Vec<u8> = Vec::new();
-    let mut wait = 0u32;
-    let mut presses = 0;
-    let key_step = |out: &mut Vec<[u8; 2]>, step: [u8; 2], wait: &mut u32| {
-        if !out.is_empty() {
-            let mut left = (*wait).min(60_000);
-            while left > 0 {
-                let w = left.min(255);
-                out.push([WAIT, w as u8]);
-                left -= w;
-            }
-        }
-        *wait = 0;
-        out.push(step);
-    };
+/// Longest hold or gap one macro step can store.
+pub const MAX_STEP_MS: u32 = 255;
+
+/// Why a macro can't be saved to the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MacroProblem {
+    /// A key or mouse button the keyboard can't type.
+    UnknownKey,
+    /// Ctrl, Shift, Alt or Win held while another key is pressed.
+    HeldModifier,
+    /// No key presses at all.
+    Empty,
+    TooLong,
+}
+
+/// A macro file for Prism's recorded steps, how many key taps it has, and
+/// whether any hold or gap had to be shortened.
+///
+/// The keyboard plays macros as taps, 4 steps each: press, hold time,
+/// release, gap before the next tap (each time 0-255 ms; the last tap has
+/// no gap). The header counts the taps. Checked on the K65: a 1 s wait made
+/// of several wait steps throws the groups out of step and leaves a key
+/// held, so longer times are shortened instead.
+pub fn macro_file(steps: &[MacroStep]) -> Result<(Vec<u8>, usize, bool), MacroProblem> {
+    // Each tap: (usb code, pressed at, released at), in ms from the start.
+    let mut taps: Vec<(u8, u64, Option<u64>)> = Vec::new();
+    let mut t: u64 = 0;
     for s in steps {
         match *s {
-            MacroStep::Wait { ms } => wait = wait.saturating_add(ms),
+            MacroStep::Wait { ms } => t += ms as u64,
             MacroStep::Down { key } => {
-                let u = usb_code(key)?;
-                if !held.contains(&u) {
-                    held.push(u);
-                    presses += 1;
-                    key_step(&mut out, [PRESS, u], &mut wait);
+                let u = usb_code(key).ok_or(MacroProblem::UnknownKey)?;
+                if taps.iter().any(|&(k, _, up)| k == u && up.is_none()) {
+                    continue; // already held (key repeat)
                 }
+                if taps.iter().any(|&(k, _, up)| up.is_none() && (0xe0..=0xe7).contains(&k)) {
+                    return Err(MacroProblem::HeldModifier);
+                }
+                taps.push((u, t, None));
             }
             MacroStep::Up { key } => {
-                let u = usb_code(key)?;
-                if let Some(i) = held.iter().position(|h| *h == u) {
-                    held.remove(i);
-                    key_step(&mut out, [RELEASE, u], &mut wait);
+                let u = usb_code(key).ok_or(MacroProblem::UnknownKey)?;
+                if let Some(tap) = taps.iter_mut().find(|(k, _, up)| *k == u && up.is_none()) {
+                    tap.2 = Some(t);
                 }
             }
         }
     }
-    for u in held.into_iter().rev() {
-        key_step(&mut out, [RELEASE, u], &mut 0);
+    if taps.is_empty() {
+        return Err(MacroProblem::Empty);
     }
-    if presses == 0 {
-        return None;
+    if taps.len() > 0xffff {
+        return Err(MacroProblem::TooLong);
     }
+    let mut shortened = false;
+    let mut clamp = |ms: u64| {
+        if ms > MAX_STEP_MS as u64 {
+            shortened = true;
+        }
+        ms.min(MAX_STEP_MS as u64) as u8
+    };
     let mut f = MACRO_HEAD.to_vec();
-    f.extend(out.concat());
+    f[2..4].copy_from_slice(&(taps.len() as u16).to_le_bytes());
+    for (i, &(u, down, up)) in taps.iter().enumerate() {
+        let up = up.unwrap_or(t).max(down);
+        f.extend_from_slice(&[PRESS, u, WAIT, clamp(up - down), RELEASE, u]);
+        if let Some(&(_, next, _)) = taps.get(i + 1) {
+            f.extend_from_slice(&[WAIT, clamp(next.saturating_sub(up))]);
+        }
+    }
     f.extend_from_slice(&[0, 0]);
-    Some((f, presses))
+    Ok((f, taps.len(), shortened))
 }
 
 /// The key list for `entries` (slot, action file, kind).
@@ -374,8 +402,33 @@ mod tests {
         let keys = crate::k65_mini::keys();
         let p = plan(&[bind(0, ActionDef::Key { key: 30 })], &keys);
         assert!(p.actions.is_empty());
-        let (f, _) = macro_file(&[MacroStep::Down { key: 29 }, MacroStep::Wait { ms: 600 }, MacroStep::Down { key: 46 }]).unwrap();
-        // press Ctrl, wait 255+255+90, press C, release C, release Ctrl, end
-        assert_eq!(&f[16..], &hex("01e00cff0cff0c5a01060206 02e00000".replace(' ', "").as_str())[..]);
+        // Holding Ctrl while pressing C can't be played as taps.
+        assert_eq!(macro_file(&[MacroStep::Down { key: 29 }, MacroStep::Down { key: 46 }]).unwrap_err(), MacroProblem::HeldModifier);
+        // A key never released is released at the end.
+        let (f, taps, _) = macro_file(&[MacroStep::Down { key: 30 }, MacroStep::Wait { ms: 50 }]).unwrap();
+        assert_eq!((taps, &f[16..]), (1, &hex("01040c3202040000")[..]));
+    }
+
+    #[test]
+    fn macros_are_taps_like_the_keyboard_plays() {
+        // Checked on the K65: a, b, c typed with these bytes.
+        let steps = [
+            MacroStep::Down { key: 30 }, MacroStep::Wait { ms: 90 }, MacroStep::Up { key: 30 }, MacroStep::Wait { ms: 100 },
+            MacroStep::Down { key: 48 }, MacroStep::Wait { ms: 90 }, MacroStep::Up { key: 48 }, MacroStep::Wait { ms: 100 },
+            MacroStep::Down { key: 46 }, MacroStep::Wait { ms: 90 }, MacroStep::Up { key: 46 },
+        ];
+        let (f, taps, shortened) = macro_file(&steps).unwrap();
+        assert_eq!(f, hex("ac30030000000000000000000000000001040c5a02040c6401050c5a02050c6401060c5a02060000"));
+        assert_eq!((taps, shortened), (3, false));
+        // Slow typing: gaps are shortened to 255 ms, still one step each.
+        let slow = [MacroStep::Down { key: 30 }, MacroStep::Up { key: 30 }, MacroStep::Wait { ms: 5500 }, MacroStep::Down { key: 48 }, MacroStep::Up { key: 48 }];
+        let (f, taps, shortened) = macro_file(&slow).unwrap();
+        assert_eq!(&f[2..4], &[2, 0]);
+        assert_eq!(&f[16..], &hex("01040c0002040cff01050c0002050000")[..]);
+        assert_eq!((taps, shortened), (2, true));
+        // Fast typing: B pressed before A is let go still plays as two taps.
+        let rolled = [MacroStep::Down { key: 30 }, MacroStep::Wait { ms: 40 }, MacroStep::Down { key: 48 }, MacroStep::Wait { ms: 30 }, MacroStep::Up { key: 30 }, MacroStep::Wait { ms: 50 }, MacroStep::Up { key: 48 }];
+        let (f, taps, _) = macro_file(&rolled).unwrap();
+        assert_eq!((taps, &f[16..]), (2, &hex("01040c4602040c0001050c5002050000")[..]));
     }
 }

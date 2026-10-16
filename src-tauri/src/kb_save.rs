@@ -65,7 +65,11 @@ pub fn plan(kb: &K65Mini, keys: &[Key], profile: &Profile, key_name: impl Fn(u16
                 let text = match what {
                     Saved::Key(c) => key_name(*c),
                     Saved::Combo(cs) => cs.iter().map(|c| key_name(*c)).collect::<Vec<_>>().join(" + "),
-                    Saved::Macro(n) => format!("a macro ({n} key press{})", if *n == 1 { "" } else { "es" }),
+                    Saved::Macro { taps, shortened } => format!(
+                        "a macro ({taps} key tap{}){}",
+                        if *taps == 1 { "" } else { "s" },
+                        if *shortened { "; pauses longer than a quarter second are shortened, the keyboard can't store longer ones" } else { "" }
+                    ),
                 };
                 (k.to_string(), text)
             })

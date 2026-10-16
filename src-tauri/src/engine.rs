@@ -190,6 +190,7 @@ impl Engine {
             // Typing ripples: the ones spreading now, and the watcher that
             // hears presses while a ripple layer is on.
             let mut ripples: Vec<Ripple> = Vec::new();
+            let mut presses: u64 = 0;
             let mut watcher: Option<prism_input::PressWatcher> = None;
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
@@ -447,7 +448,8 @@ impl Engine {
                             _ => None,
                         };
                         if let (Some((x, y)), true) = (spot, watcher.is_some()) {
-                            ripples.push(Ripple { t0: start.elapsed().as_secs_f64(), x, y });
+                            ripples.push(Ripple { t0: start.elapsed().as_secs_f64(), x, y, n: presses });
+                            presses += 1;
                             if ripples.len() > 48 {
                                 ripples.remove(0);
                             }

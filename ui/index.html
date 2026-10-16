@@ -358,7 +358,7 @@
 
                 <div class="field" id="field-colors">
                   <span class="label">Colors</span>
-                  <div class="color-slots" role="tablist" aria-label="Which color to edit">
+                  <div class="color-slots" id="color-slots" role="tablist" aria-label="Which color to edit">
                     <button class="slot" id="slot-1" data-slot="color1" role="tab">
                       <span class="chip" id="color1-chip"></span>
                       <span><span class="slot-name" id="slot-1-name">Color 1</span><span class="slot-hex" id="color1-hex"></span></span>
@@ -368,6 +368,13 @@
                       <span><span class="slot-name" id="slot-2-name">Color 2</span><span class="slot-hex" id="color2-hex"></span></span>
                     </button>
                   </div>
+                  <div class="palette-row" id="palette-row" hidden></div>
+                  <label class="switch" id="random-row" hidden>
+                    <input type="checkbox" id="random-colors">
+                    <span class="switch-track"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">Random colors</span>
+                  </label>
+                  <p class="hint" id="random-hint" hidden>Every key press gets its own bright color.</p>
 
                   <div class="picker" id="picker">
                     <div class="sv" id="sv" role="slider" tabindex="0" aria-label="Shade (arrow keys adjust)">

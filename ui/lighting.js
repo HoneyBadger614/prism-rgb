@@ -23,7 +23,7 @@ const Lighting = (() => {
     "color-cycle": { name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
     comet: { name: "Comet", desc: "A bright head with a fading tail", c1: "Head", c2: "Background", spread: true, speed: true, start: { color1: PINK, color2: "#140624", spread: "per-fan" } },
     strobe: { name: "Strobe", desc: "Fast flashing", c1: "Flash", c2: "Between", speed: true, start: { color1: WHITE, color2: "#000000", speed: 4 } },
-    ripple: { name: "Typing ripple", desc: "Rings spread from each key you press. Add it to each device you want them on", c1: "Ripple", c2: "Background", speed: true, start: { color1: PINK, color2: "#140624", speed: 5 } },
+    ripple: { name: "Typing ripple", desc: "Rings spread from each key you press, over your other layers. Add it to each device you want them on", c1: "Ripple 1", palette: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
   };
 
   const ICON = {
@@ -417,7 +417,7 @@ const Lighting = (() => {
       case "rainbow": case "color-cycle": return "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)";
       case "comet": return `linear-gradient(90deg, ${c2} 0 45%, ${c1} 70%, ${c2} 72%)`;
       case "strobe": return c1;
-      case "ripple": return `radial-gradient(circle, ${c2} 0 18%, ${c1} 22% 30%, ${c2} 34% 48%, ${c1} 52% 58%, ${c2} 62%)`;
+      case "ripple": { const bg = "#140624"; return `radial-gradient(circle, ${bg} 0 18%, ${c1} 22% 30%, ${bg} 34% 48%, ${c1} 52% 58%, ${bg} 62%)`; }
     }
     return c1;
   }
@@ -1176,7 +1176,11 @@ const Lighting = (() => {
     $("slot-2").hidden = !fx.c2;
     $("slot-1-name").textContent = fx.c1 || "";
     $("slot-2-name").textContent = fx.c2 || "";
-    if (!fx.c2) activeSlot = "color1";
+    if (!fx.c2 && activeSlot === "color2") activeSlot = "color1";
+    $("color-slots").hidden = false;
+    $("picker").hidden = false;
+    $("quick-colors").hidden = false;
+    renderPalette(l, fx);
     for (const k of ["color1", "color2"]) {
       $(`${k}-chip`).style.setProperty("--chip", l[k]);
       $(`${k}-hex`).textContent = l[k];
@@ -1185,7 +1189,7 @@ const Lighting = (() => {
     $("slot-2").classList.toggle("active", activeSlot === "color2");
     $("slot-1").setAttribute("aria-selected", String(activeSlot === "color1"));
     $("slot-2").setAttribute("aria-selected", String(activeSlot === "color2"));
-    if (fx.c1) syncPicker();
+    if (fx.c1 && !(fx.palette && l.random)) syncPicker();
 
     $("brightness").value = l.brightness;
     $("brightness").style.setProperty("--fill", `${l.brightness}%`);
@@ -1220,7 +1224,7 @@ const Lighting = (() => {
   }
 
   function syncPicker() {
-    const hex = layer()[activeSlot];
+    const hex = slotColor();
     if (!hsv || hsvToHex(hsv) !== hex) hsv = hexToHsv(hex);
     $("sv").style.setProperty("--hue-color", hsvToHex({ h: hsv.h, s: 1, v: 1 }));
     const knob = $("sv-knob");
@@ -1238,9 +1242,72 @@ const Lighting = (() => {
     }
   }
 
+  // The color being edited: "color1", "color2", or "p0", "p1"... for a
+  // ripple's extra colors.
+  function slotColor() {
+    const l = layer();
+    if (activeSlot.startsWith("p")) return (l.palette || [])[Number(activeSlot.slice(1))] || l.color1;
+    return l[activeSlot];
+  }
+
+  // The layer change that sets the edited color.
+  function slotPatch(hex) {
+    if (!activeSlot.startsWith("p")) return { [activeSlot]: hex };
+    const palette = [...(layer().palette || [])];
+    palette[Number(activeSlot.slice(1))] = hex;
+    return { palette };
+  }
+
   function pickHsv(next) {
     hsv = { ...hsv, ...next };
-    editLayer({ [activeSlot]: hsvToHex(hsv) });
+    editLayer(slotPatch(hsvToHex(hsv)));
+  }
+
+  // A ripple's extra colors: one slot each, plus Add; or random colors.
+  function renderPalette(l, fx) {
+    const row = $("palette-row");
+    const on = !!fx.palette;
+    row.hidden = !on || l.random;
+    $("random-row").hidden = !on;
+    $("random-hint").hidden = !on || !l.random;
+    $("random-colors").checked = !!l.random;
+    if (!on) return;
+    if (l.random) {
+      $("color-slots").hidden = true;
+      $("picker").hidden = true;
+      $("quick-colors").hidden = true;
+      return;
+    }
+    const palette = l.palette || [];
+    if (activeSlot.startsWith("p") && Number(activeSlot.slice(1)) >= palette.length) activeSlot = "color1";
+    row.replaceChildren(...palette.map((c, i) => {
+      const b = el("button", "slot" + (activeSlot === `p${i}` ? " active" : ""));
+      const chip = el("span", "chip");
+      chip.style.setProperty("--chip", c);
+      const txt = el("span");
+      txt.append(el("span", "slot-name", `Ripple ${i + 2}`), el("span", "slot-hex", c));
+      const x = el("span", "chip-x", "×");
+      x.title = "Remove this color";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const next = palette.filter((_, j) => j !== i);
+        activeSlot = "color1";
+        hsv = null;
+        editLayer({ palette: next });
+      });
+      b.append(chip, txt, x);
+      b.addEventListener("click", () => { activeSlot = `p${i}`; hsv = null; syncEditor(); });
+      return b;
+    }), ...(palette.length < 15 ? [(() => {
+      const add = el("button", "mini palette-add", "+ Add a color");
+      add.addEventListener("click", () => {
+        const pick = QUICK_COLORS[(palette.length + 1) % QUICK_COLORS.length][1];
+        activeSlot = `p${palette.length}`;
+        hsv = null;
+        editLayer({ palette: [...palette, pick] });
+      });
+      return add;
+    })()] : []));
   }
 
   // Drag on an element; `move` gets the pointer position as 0..1 fractions.
@@ -1283,7 +1350,7 @@ const Lighting = (() => {
       input.classList.toggle("bad", !ok && v.length === 7);
       if (ok) {
         hsv = null;
-        editLayer({ [activeSlot]: v.toLowerCase() });
+        editLayer(slotPatch(v.toLowerCase()));
       }
     });
     input.addEventListener("blur", () => layer() && syncPicker());
@@ -1400,7 +1467,8 @@ const Lighting = (() => {
     syncLayout();
     layerIndex = Math.max(0, stack().length - 1);
 
-    $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));
+    $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer(slotPatch(hex)); })));
+    $("random-colors").addEventListener("change", (e) => { activeSlot = "color1"; hsv = null; editLayer({ random: e.target.checked }); });
     $("paint-swatches").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(`Paint ${n.toLowerCase()}`, hex, () => paint(hex))));
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.addEventListener("click", () => editLayer({ spread: b.dataset.spread })));

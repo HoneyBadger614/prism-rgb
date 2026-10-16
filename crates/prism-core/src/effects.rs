@@ -22,6 +22,8 @@ const HOT_PINK: Rgb = Rgb::new(0xff, 0x2d, 0x95);
 pub const MAX_PROFILES: usize = 50;
 pub const MAX_LAYERS: usize = 32;
 pub const MAX_NAME_LEN: usize = 40;
+/// Most extra colors a layer can take turns with.
+pub const MAX_PALETTE: usize = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -42,8 +44,10 @@ pub enum Effect {
     Comet,
     /// Flashing between color 1 and color 2.
     Strobe,
-    /// Rings of color 1 spreading from each key press, over color 2. The
-    /// rings travel across every device that has this effect.
+    /// Rings spreading from each key press, over whatever the layers below
+    /// show. Each press takes the next color (color 1, then the palette),
+    /// or a random one. The rings travel across every device that has this
+    /// effect.
     Ripple,
 }
 
@@ -92,6 +96,10 @@ pub struct Layer {
     /// 1 (slow) to 10 (fast).
     pub speed: u8,
     pub target: Target,
+    /// More colors after color 1, taken in turn (ripples).
+    pub palette: Vec<Rgb>,
+    /// A random bright color each time instead (ripples).
+    pub random: bool,
 }
 
 impl Default for Layer {
@@ -106,6 +114,8 @@ impl Default for Layer {
             brightness: 100,
             speed: 5,
             target: Target::All,
+            palette: vec![],
+            random: false,
         }
     }
 }
@@ -412,6 +422,7 @@ impl Layer {
         self.name = clean_name(&self.name, "Layer");
         self.brightness = self.brightness.min(100);
         self.speed = self.speed.clamp(1, 10);
+        self.palette.truncate(MAX_PALETTE);
         if let Target::Leds { leds } = &mut self.target {
             let set: BTreeSet<LedRef> = leds.iter().copied().filter(|r| surface.index(*r).is_some()).collect();
             *leds = set.into_iter().collect();
@@ -517,7 +528,8 @@ pub enum OnboardLight {
 pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -> Vec<OnboardLight> {
     let still: Vec<Rgb> = render_layers(layers, surface, master, t).concat();
     let mut top: Vec<Option<usize>> = vec![None; surface.leds.len()];
-    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled) {
+    // Ripples can't play without Prism, so they don't count.
+    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && l.effect != Effect::Ripple) {
         match &layer.target {
             Target::All => top.iter_mut().for_each(|t| *t = Some(n)),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(|i| top[i] = Some(n)),
@@ -546,6 +558,24 @@ pub struct Ripple {
     pub t0: f64,
     pub x: f64,
     pub y: f64,
+    /// Which press this was (0, 1, 2...), so every device gives it the same color.
+    pub n: u64,
+}
+
+impl Layer {
+    /// The color a ripple layer gives press number `n`.
+    pub fn ripple_color(&self, n: u64) -> Rgb {
+        if self.random {
+            // A well-spread hue per press (golden-ratio steps), always bright.
+            let h = (n as f64 * 0.618_033_988_75).fract() * 360.0;
+            return Rgb::from_hsv(h as f32, 1.0, 1.0);
+        }
+        let count = 1 + self.palette.len() as u64;
+        match n % count {
+            0 => self.color1,
+            i => self.palette[i as usize - 1],
+        }
+    }
 }
 
 /// Where a device sits on the desk ([x, y, width, height]) and the ripples
@@ -595,6 +625,20 @@ pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64,
 
     for layer in layers.iter().filter(|l| l.enabled) {
         let level = layer.brightness as f32 / 100.0;
+        if layer.effect == Effect::Ripple {
+            // Only the rings are painted, over what the layers below show.
+            let Some(w) = world else { continue };
+            let mut ring = |i: usize| {
+                if let Some((c, glow)) = ripple_at(layer, &surface.leds[i], t, w) {
+                    flat[i] = flat[i].mix(c, glow as f32 * level);
+                }
+            };
+            match &layer.target {
+                Target::All => (0..total).for_each(&mut ring),
+                Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(&mut ring),
+            }
+            continue;
+        }
         let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface.laps, t, world).scale(level);
         match &layer.target {
             Target::All => (0..total).for_each(&mut paint),
@@ -622,7 +666,27 @@ pub fn render(store: &LightingStore, layout: &[ChannelLayout], t: f64) -> Vec<Ve
     }
 }
 
-fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, world: Option<&World>) -> Rgb {
+/// The brightest ripple ring over one LED: its color and how strongly
+/// (0-1). None if no ring is there.
+fn ripple_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
+    let [px, py, pw, ph] = w.place;
+    let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
+    let v = ripple_speed(l.speed);
+    w.ripples
+        .iter()
+        .filter(|r| t >= r.t0)
+        .map(|r| {
+            let radius = (t - r.t0) * v;
+            let d = ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt();
+            let ring = (1.0 - (d - radius).abs() / RIPPLE_WIDTH).max(0.0);
+            (r, ring * (1.0 - radius / RIPPLE_REACH).max(0.0))
+        })
+        .filter(|(_, glow)| *glow > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(r, glow)| (l.ripple_color(r.n), glow))
+}
+
+fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, _world: Option<&World>) -> Rgb {
     let d = match l.spread {
         Spread::Across => 0,
         Spread::PerFan => 1,
@@ -657,24 +721,8 @@ fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, world: Option<&Wo
         Effect::Strobe => {
             if (t * speed * 0.8).rem_euclid(1.0) < 0.25 { l.color1 } else { l.color2 }
         }
-        Effect::Ripple => {
-            let Some(w) = world else { return l.color2 };
-            let [px, py, pw, ph] = w.place;
-            let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
-            let v = ripple_speed(l.speed);
-            let glow = w
-                .ripples
-                .iter()
-                .filter(|r| t >= r.t0)
-                .map(|r| {
-                    let radius = (t - r.t0) * v;
-                    let d = ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt();
-                    let ring = (1.0 - (d - radius).abs() / RIPPLE_WIDTH).max(0.0);
-                    ring * (1.0 - radius / RIPPLE_REACH).max(0.0)
-                })
-                .fold(0.0, f64::max);
-            l.color2.mix(l.color1, glow as f32)
-        }
+        // Drawn over the layers below in render_layers_in, never on its own.
+        Effect::Ripple => BLACK,
     }
 }
 
@@ -903,22 +951,31 @@ mod tests {
     }
 
     #[test]
-    fn ripples_spread_and_fade() {
+    fn ripples_spread_over_the_layers_below() {
         let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0)]);
-        let layer = Layer { effect: Effect::Ripple, color1: WHITE, color2: BLACK, speed: 5, ..Default::default() };
-        // A press at the keyboard's left end: the left key lights first,
-        // the right one (0.4 desk units away) once the ring gets there.
-        let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62 }];
+        let base = Layer { effect: Effect::Static, color1: PURPLE, ..Default::default() };
+        let ripple = Layer { effect: Effect::Ripple, color1: WHITE, palette: vec![HOT_PINK], speed: 5, ..Default::default() };
+        // Press 0 at the keyboard's left end: the left key lights first, the
+        // right one (0.4 desk units away) once the ring gets there.
+        let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 0 }];
         let w = World { ripples: &r, place: desk::KEYBOARD };
-        let at = |t: f64| render_layers_in(&[layer.clone()], &kb, 100, t, Some(&w))[0].clone();
-        assert!(at(0.0)[0].r > 200 && at(0.0)[1] == BLACK);
+        let at = |t: f64, rs: &World| render_layers_in(&[base.clone(), ripple.clone()], &kb, 100, t, Some(rs))[0].clone();
+        assert_eq!(at(0.0, &w), vec![WHITE, PURPLE]); // ring color over the purple below
         let reach = 0.4 / (0.12 * 5.0);
-        assert!(at(reach)[1].r > 100, "{:?}", at(reach));
-        assert_eq!(at(reach)[0], BLACK);
-        // Without ripples it's the background; it never counts as animated.
-        assert!(render_layers(&[layer.clone()], &kb, 100, 1.0)[0].iter().all(|&c| c == BLACK));
+        assert!(at(reach, &w)[1].g > 150, "{:?}", at(reach, &w));
+        assert_eq!(at(reach, &w)[0], PURPLE);
+        // Press 1 takes the next color.
+        let r1 = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 1 }];
+        assert_eq!(at(0.0, &World { ripples: &r1, place: desk::KEYBOARD })[0], HOT_PINK);
+        // Without ripples the layers below show untouched.
+        assert!(render_layers(&[base.clone(), ripple.clone()], &kb, 100, 1.0)[0].iter().all(|&c| c == PURPLE));
         assert!(!Effect::Ripple.is_animated());
         assert!(!ripple_alive(&r[0], 20.0));
+        // Random colors: bright and different from one press to the next.
+        let rnd = Layer { random: true, ..ripple.clone() };
+        assert_ne!(rnd.ripple_color(0), rnd.ripple_color(1));
+        let c = rnd.ripple_color(7);
+        assert_eq!(c.r.max(c.g).max(c.b), 255);
     }
 
     #[test]

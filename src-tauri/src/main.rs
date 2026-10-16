@@ -248,10 +248,10 @@ async fn mouse_save_plan(app: tauri::AppHandle) -> Result<mouse_save::SavePlan, 
 /// Saves the active profile's button keys and DPI into one of the mouse's
 /// onboard profiles, after a backup. Changes the mouse's memory.
 #[tauri::command]
-async fn mouse_save(app: tauri::AppHandle, folder: u8) -> Result<mouse_save::SaveReport, String> {
+async fn mouse_save(app: tauri::AppHandle, folder: u8, lighting: bool) -> Result<mouse_save::SaveReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = config_dir(&app)?;
-        app.state::<AppState>().engine.mouse_save(folder, &dir)
+        app.state::<AppState>().engine.mouse_save(folder, lighting, &dir)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -268,10 +268,10 @@ async fn kb_save_plan(app: tauri::AppHandle) -> Result<kb_save::SavePlan, String
 /// Saves the active profile's key bindings into one of the keyboard's
 /// onboard profiles, after a backup. Changes the keyboard's memory.
 #[tauri::command]
-async fn kb_save(app: tauri::AppHandle, root: u16) -> Result<kb_save::SaveReport, String> {
+async fn kb_save(app: tauri::AppHandle, root: u16, lighting: bool) -> Result<kb_save::SaveReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = config_dir(&app)?;
-        app.state::<AppState>().engine.kb_save(root, &dir)
+        app.state::<AppState>().engine.kb_save(root, lighting, &dir)
     })
     .await
     .map_err(|e| e.to_string())?

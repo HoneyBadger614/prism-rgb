@@ -268,6 +268,32 @@ pub fn macro_files(profile_dat: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/* ---------- lighting ----------
+ * lghtcnt.cnt: how many lighting entries (u32). Entry n is two files:
+ *   lght_nn.d: 07 00 02 00 00, red, green, blue, ff, 00 00 00 00 (steady)
+ *   lght_nn.k: a count (u32), then the zones it lights.
+ * Zones (checked on the mouse): Logo 0, Scroll wheel 2, Front 3, Back 5.
+ * Zone 1 is the DPI light, which always shows the DPI stage's color.
+ */
+
+/// Prism's zone name -> the mouse's onboard zone number.
+pub const LIGHT_ZONES: [(&str, u8); 4] = [("Front", 3), ("Scroll wheel", 2), ("Logo", 0), ("Back", 5)];
+
+/// Lighting files for a still picture: (file name, contents), the count
+/// file last. `zones` are Prism's zone colors, already corrected for LEDs.
+pub fn lighting_files(zones: &[(&str, crate::Rgb)]) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut n = 0u32;
+    for (name, number) in LIGHT_ZONES {
+        let Some((_, c)) = zones.iter().find(|(z, _)| *z == name) else { continue };
+        out.push((format!("lght_{n:02}.d"), vec![0x07, 0x00, 0x02, 0x00, 0x00, c.r, c.g, c.b, 0xff, 0, 0, 0, 0]));
+        out.push((format!("lght_{n:02}.k"), vec![0x01, 0x00, 0x00, 0x00, number]));
+        n += 1;
+    }
+    out.push(("lghtcnt.cnt".into(), n.to_le_bytes().to_vec()));
+    out
+}
+
 /// A copy of PROFILE.I with the DPI numbers from `dpi` (sniper and stages
 /// 1-3). None if the file doesn't look like a PROFILE.I.
 pub fn patch_dpi(profile_i: &[u8], dpi: &DpiSettings) -> Option<Vec<u8>> {
@@ -395,6 +421,18 @@ mod tests {
         assert!(macro_file(&[MacroStep::Down { key: 0x110 }]).is_none());
         let (f, _) = macro_file(&[MacroStep::Down { key: 30 }, MacroStep::Wait { ms: 99_999 }, MacroStep::Up { key: 30 }]).unwrap();
         assert_eq!(&f[10..12], &[0xff, 0xff]);
+    }
+
+    #[test]
+    fn lighting_like_icue() {
+        use crate::Rgb;
+        // iCUE: Logo green, Front blue, Scroll wheel red.
+        let f = lighting_files(&[("Front", Rgb::new(0, 0, 255)), ("Scroll wheel", Rgb::new(255, 0, 0)), ("Logo", Rgb::new(0, 255, 0))]);
+        assert!(f.contains(&("lght_02.d".into(), hex("070002000000ff00ff00000000"))));
+        assert!(f.contains(&("lght_02.k".into(), hex("0100000000"))));
+        assert!(f.contains(&("lght_00.d".into(), hex("07000200000000ffff00000000"))));
+        assert!(f.contains(&("lght_00.k".into(), hex("0100000003"))));
+        assert_eq!(f.last().unwrap(), &("lghtcnt.cnt".to_string(), hex("03000000")));
     }
 
     fn sample_profile_i() -> Vec<u8> {

@@ -47,12 +47,14 @@ enum Msg {
     MousePlan(Sender<Result<crate::mouse_save::SavePlan, String>>),
     /// Back up into the folder, then save the active profile into the
     /// mouse's onboard profile folder.
-    MouseSave(u8, PathBuf, String, Sender<Result<crate::mouse_save::SaveReport, String>>),
+    /// (folder, also save lighting, ...)
+    MouseSave(u8, bool, PathBuf, String, Sender<Result<crate::mouse_save::SaveReport, String>>),
     /// What "Save to keyboard" would write for the active profile (read-only).
     KbPlan(Sender<Result<crate::kb_save::SavePlan, String>>),
     /// Back up into the folder, then save the active profile into the
     /// keyboard's onboard profile with this root file.
-    KbSave(u16, PathBuf, String, Sender<Result<crate::kb_save::SaveReport, String>>),
+    /// (root file, also save lighting, ...)
+    KbSave(u16, bool, PathBuf, String, Sender<Result<crate::kb_save::SaveReport, String>>),
     Stop,
 }
 
@@ -344,7 +346,9 @@ impl Engine {
                         };
                         let _ = done.send(r);
                     }
-                    Ok(Msg::MouseSave(folder, dir, name, done)) => {
+                    Ok(Msg::MouseSave(folder, lighting, dir, name, done)) => {
+                        // A still picture of the zones as they look right now.
+                        let picture: Vec<(&str, Rgb)> = nightsword::ZONES.iter().map(|z| z.0).zip(zones.iter().copied()).collect();
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match (&mouse.dev, api.as_ref()) {
                             (Some(m), Some(api)) => {
@@ -353,7 +357,7 @@ impl Engine {
                                 if !b.mouse.read || b.mouse.error.is_some() || b.mouse.files.is_empty() {
                                     Err(format!("The backup didn't work ({}), so nothing was written", b.mouse.error.unwrap_or_else(|| "no files".into())))
                                 } else {
-                                    crate::mouse_save::save(m, api, &profile, folder, b.created)
+                                    crate::mouse_save::save(m, api, &profile, folder, lighting.then_some(picture.as_slice()), b.created)
                                 }
                             }
                             _ => Err("The mouse isn't connected".to_string()),
@@ -368,7 +372,8 @@ impl Engine {
                         };
                         let _ = done.send(r);
                     }
-                    Ok(Msg::KbSave(root, dir, name, done)) => {
+                    Ok(Msg::KbSave(root, lighting, dir, name, done)) => {
+                        let picture = k65_mini::slot_colors(&devices.keys, keys);
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match &kb.dev {
                             Some(k) => {
@@ -383,7 +388,7 @@ impl Engine {
                                         .iter()
                                         .filter_map(|(f, _)| f.strip_suffix(".bin").and_then(|h| u16::from_str_radix(h, 16).ok()))
                                         .collect();
-                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, b.created)
+                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, lighting.then_some(&picture), b.created)
                                 }
                             }
                             None => Err("The keyboard isn't connected".to_string()),
@@ -496,10 +501,10 @@ impl Engine {
 
     /// Saves the active profile's button keys and DPI into the mouse's
     /// onboard profile `folder`, after a fresh backup.
-    pub fn mouse_save(&self, folder: u8, config_dir: &std::path::Path) -> Result<crate::mouse_save::SaveReport, String> {
+    pub fn mouse_save(&self, folder: u8, lighting: bool, config_dir: &std::path::Path) -> Result<crate::mouse_save::SaveReport, String> {
         let (name, dir) = crate::backup::new_folder(config_dir, "_before-save").map_err(|e| e.to_string())?;
         let (tx, rx) = mpsc::channel();
-        self.tx.send(Msg::MouseSave(folder, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        self.tx.send(Msg::MouseSave(folder, lighting, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
         rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the mouse took too long".to_string())?
     }
 
@@ -512,10 +517,10 @@ impl Engine {
 
     /// Saves the active profile's key bindings into the keyboard's onboard
     /// profile `root`, after a fresh backup.
-    pub fn kb_save(&self, root: u16, config_dir: &std::path::Path) -> Result<crate::kb_save::SaveReport, String> {
+    pub fn kb_save(&self, root: u16, lighting: bool, config_dir: &std::path::Path) -> Result<crate::kb_save::SaveReport, String> {
         let (name, dir) = crate::backup::new_folder(config_dir, "_before-save").map_err(|e| e.to_string())?;
         let (tx, rx) = mpsc::channel();
-        self.tx.send(Msg::KbSave(root, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        self.tx.send(Msg::KbSave(root, lighting, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
         rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the keyboard took too long".to_string())?
     }
 

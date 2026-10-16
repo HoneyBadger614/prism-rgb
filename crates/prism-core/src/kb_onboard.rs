@@ -18,6 +18,13 @@
 //!   macro: `ac 30`, the number of key taps (u16), 12 zeros, then per tap
 //!   [01, code] press, [0c, ms] hold, [02, code] release, [0c, ms] gap
 //!   (no gap after the last), and `00 00` to end. See [`macro_file`].
+//! - lighting: the root's 4th file lists layers, top first: `69 6c`, a
+//!   count (u16), then [08 00, layer file (u16)] each. A steady layer is
+//!   `87 00 01 0a 00 00 00 00`, 0x80, then 128 copies of its color as
+//!   [ff, blue, green, red], then how many keys it covers and their slots.
+//!   (The 128 colors are a sequence the layer plays through; different
+//!   colors there make it flash. Checked on the K65: one layer per color,
+//!   five at once, shows steady per-row colors.)
 
 use crate::bindings::{ActionDef, BindingDef, InputDevice, MacroStep, PlayMode};
 use crate::k65_mini::Key;
@@ -109,6 +116,8 @@ pub fn usb_code(code: u16) -> Option<u8> {
 pub struct Root {
     pub name: String,
     pub key_list: u16,
+    /// The list of lighting layers.
+    pub layers: u16,
     pub flags: u16,
 }
 
@@ -119,7 +128,7 @@ pub fn parse_root(f: &[u8]) -> Option<Root> {
     let id = |i: usize| u16::from_le_bytes([f[6 + i * 2], f[7 + i * 2]]);
     let len = u16::from_le_bytes([f[30], f[31]]) as usize;
     let name = String::from_utf8_lossy(f.get(32..32 + len)?).into_owned();
-    Some(Root { name, key_list: id(0), flags: id(4) })
+    Some(Root { name, key_list: id(0), layers: id(3), flags: id(4) })
 }
 
 /// The onboard profiles' root files, from file 0x000f.
@@ -331,6 +340,81 @@ pub fn flags(old: &[u8], bound: &[u8]) -> Option<Vec<u8>> {
     Some(f)
 }
 
+/* ---------- lighting ---------- */
+
+const LIGHT_TAG: [u8; 2] = [0x69, 0x6c];
+const LAYER_HEAD: [u8; 8] = [0x87, 0x00, 0x01, 0x0a, 0x00, 0x00, 0x00, 0x00];
+const LAYER_COLORS: usize = 128;
+/// Most layers Prism saves; more colors than this are merged.
+pub const MAX_LAYERS: usize = 24;
+
+/// The layer files a lighting list points to. None if it isn't one.
+pub fn layer_list(f: &[u8]) -> Option<Vec<u16>> {
+    if f.len() < 4 || f[..2] != LIGHT_TAG {
+        return None;
+    }
+    let n = u16::from_le_bytes([f[2], f[3]]) as usize;
+    if f.len() != 4 + n * 4 {
+        return None;
+    }
+    Some(f[4..].chunks(4).map(|e| u16::from_le_bytes([e[2], e[3]])).collect())
+}
+
+/// A lighting list for these layer files, top first.
+pub fn layer_list_file(ids: &[u16]) -> Vec<u8> {
+    let mut f = LIGHT_TAG.to_vec();
+    f.extend_from_slice(&(ids.len() as u16).to_le_bytes());
+    for id in ids {
+        f.extend_from_slice(&[0x08, 0x00]);
+        f.extend_from_slice(&id.to_le_bytes());
+    }
+    f
+}
+
+/// One steady layer: `color` (already corrected for LEDs) on `slots`.
+pub fn layer_file(color: crate::Rgb, slots: &[u8]) -> Vec<u8> {
+    let mut f = LAYER_HEAD.to_vec();
+    f.push(LAYER_COLORS as u8);
+    for _ in 0..LAYER_COLORS {
+        f.extend_from_slice(&[0xff, color.b, color.g, color.r]);
+    }
+    f.push(slots.len() as u8);
+    f.extend_from_slice(slots);
+    f
+}
+
+/// Groups slots by color for a still picture: one (color, slots) per
+/// layer, most keys first. Unlit slots get no layer. Colors that are
+/// nearly the same are merged until there are at most [`MAX_LAYERS`].
+pub fn color_groups(slots: &[(u8, crate::Rgb)]) -> Vec<(crate::Rgb, Vec<u8>)> {
+    let lit: Vec<(u8, crate::Rgb)> = slots.iter().copied().filter(|(_, c)| (c.r, c.g, c.b) != (0, 0, 0)).collect();
+    for shift in 0..8 {
+        let mut groups: Vec<((u8, u8, u8), Vec<(u8, crate::Rgb)>)> = Vec::new();
+        for &(slot, c) in &lit {
+            let k = (c.r >> shift, c.g >> shift, c.b >> shift);
+            match groups.iter_mut().find(|g| g.0 == k) {
+                Some(g) => g.1.push((slot, c)),
+                None => groups.push((k, vec![(slot, c)])),
+            }
+        }
+        if groups.len() <= MAX_LAYERS || shift == 7 {
+            let mut out: Vec<(crate::Rgb, Vec<u8>)> = groups
+                .into_iter()
+                .map(|(_, members)| {
+                    let n = members.len() as u32;
+                    let avg = |f: fn(&crate::Rgb) -> u8| (members.iter().map(|(_, c)| f(c) as u32).sum::<u32>() / n) as u8;
+                    let color = crate::Rgb::new(avg(|c| c.r), avg(|c| c.g), avg(|c| c.b));
+                    (color, members.iter().map(|(s, _)| *s).collect())
+                })
+                .collect();
+            out.sort_by_key(|(_, s)| std::cmp::Reverse(s.len()));
+            out.truncate(MAX_LAYERS);
+            return out;
+        }
+    }
+    unreachable!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,10 +465,36 @@ mod tests {
     #[test]
     fn reads_profile_files() {
         let root = hex("1ef1140000006b6d6e6d696d6d6d6c6d00000000000000000000000000000c0048572050726f66696c652032000000000000000000");
-        assert_eq!(parse_root(&root), Some(Root { name: "HW Profile 2".into(), key_list: 0x6d6b, flags: 0x6d6c }));
+        assert_eq!(parse_root(&root), Some(Root { name: "HW Profile 2".into(), key_list: 0x6d6b, layers: 0x6d6d, flags: 0x6d6c }));
         assert_eq!(profile_roots(&hex("13000200606d676d")), vec![0x6d60, 0x6d67]);
         assert_eq!(key_list_actions(&hex("3dac00006f010000636d61006d010000646d3100")), Some(vec![0x6d63, 0x6d64]));
         assert_eq!(key_list_actions(&hex("3dac0000")), Some(vec![]));
+    }
+
+    #[test]
+    fn lighting_files_match_icue() {
+        // iCUE's blue WASD layer and its two-layer list.
+        let wasd = layer_file(crate::Rgb::new(0, 0, 0xff), &[0x1a, 0x04, 0x16, 0x07]);
+        assert_eq!(wasd.len(), 526);
+        assert_eq!(&wasd[..13], &hex("8700010a0000000080ffff0000")[..]);
+        assert_eq!(&wasd[521..], &hex("041a041607")[..]);
+        let list = hex("696c020008006f6d0800706d");
+        assert_eq!(layer_list(&list), Some(vec![0x6d6f, 0x6d70]));
+        assert_eq!(layer_list_file(&[0x6d6f, 0x6d70]), list);
+        assert_eq!(layer_list(&hex("696c0000")), Some(vec![]));
+    }
+
+    #[test]
+    fn groups_colors_into_layers() {
+        use crate::Rgb;
+        let red = Rgb::new(255, 0, 0);
+        let g = color_groups(&[(1, red), (2, Rgb::new(0, 0, 255)), (3, red), (4, Rgb::new(0, 0, 0))]);
+        assert_eq!(g, vec![(red, vec![1, 3]), (Rgb::new(0, 0, 255), vec![2])]);
+        // A smooth fade over 100 keys is merged into at most MAX_LAYERS.
+        let fade: Vec<(u8, Rgb)> = (0..100).map(|i| (i as u8, Rgb::new(i as u8 * 2 + 50, 0, 200))).collect();
+        let g = color_groups(&fade);
+        assert!(g.len() <= MAX_LAYERS && g.len() > 4, "{}", g.len());
+        assert_eq!(g.iter().map(|x| x.1.len()).sum::<usize>(), 100);
     }
 
     #[test]

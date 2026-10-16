@@ -63,6 +63,7 @@
           <div>
             <h2 id="dev-title"></h2>
             <p class="dev-sub" id="dev-sub"></p>
+            <button class="mini report-btn" id="report-btn" hidden>Help support this device</button>
           </div>
           <div class="tabs" role="tablist">
             <button class="tab" role="tab" id="tab-light" data-t="light" aria-selected="true">Lighting</button>
@@ -418,6 +419,10 @@
   </div>
 
   <!-- Effect picker -->
+  <div class="overlay" id="report-overlay" hidden>
+    <div class="fx-dialog report-dialog" id="report-dialog" role="dialog" aria-modal="true" aria-label="Help support this device"></div>
+  </div>
+
   <div class="overlay" id="fx-overlay" hidden>
     <div class="fx-dialog" role="dialog" aria-modal="true" aria-labelledby="fx-title">
       <div class="fx-head">
@@ -441,6 +446,7 @@
   <script src="lighting.js"></script>
   <script src="bindings.js"></script>
   <script src="onboard.js"></script>
+  <script src="report.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

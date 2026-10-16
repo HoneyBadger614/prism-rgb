@@ -489,3 +489,21 @@ select.text-input { width: 100%; }
 .mini.danger:hover { border-color: #ff6b8a; }
 .btn.danger { background: #d4214e; }
 .btn.danger:hover { background: #e8335f; }
+
+/* device report */
+.report-btn { margin-top: 8px; }
+.report-dialog { width: min(720px, 100%); }
+.report-text { margin: 0; font-size: 14px; line-height: 1.5; }
+.report-strong { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 600; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.report-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.45; color: var(--text); }
+.report-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13px; }
+.report-key { color: var(--muted); }
+.report-presses { min-height: 34px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; }
+.report-options { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.report-number { width: 70px; font: 600 13px var(--font-mono); color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.report-toggles { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.report-toggle { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.report-notes { width: 100%; min-height: 60px; resize: vertical; font: 13px var(--font-body, inherit); color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.report-json { margin: 0; max-height: 260px; overflow: auto; font: 11px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.report-path { margin: 0; font: 12px var(--font-mono); word-break: break-all; padding: 8px 10px; background: var(--bg); border-radius: 8px; }
+.report-actions { margin-top: 6px; }

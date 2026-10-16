@@ -147,6 +147,11 @@ function render() {
   if (!has) return;
   const d = devices[Math.min(selected, devices.length - 1)];
   $("dev-title").textContent = d.name;
+  // Any USB device can be reported; for unknown or untested ones it's how
+  // they get supported.
+  $("report-btn").hidden = !d.usb_id;
+  $("report-btn").textContent = d.recognized && !d.experimental ? "Report how this device works" : "Help support this device";
+  $("report-btn").onclick = () => Report.open(d);
   $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · ${d.bus}${d.experimental ? " · Experimental: not yet tested with Prism" : ""}`;
   // Fans, the graphics card and the motherboard have no buttons or onboard
   // memory, so they only get Lighting.
@@ -204,6 +209,7 @@ $("rescan").addEventListener("click", scan);
 Lighting.init().then(async () => {
   Bindings.init();
   Onboard.init();
+  Report.init();
   await scan();
   // Open on a given device and tab if asked (for screenshots).
   const view = await invoke("start_view").catch(() => null);

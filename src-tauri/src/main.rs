@@ -8,6 +8,7 @@ mod kb_save;
 mod mouse_buttons;
 mod mouse_save;
 mod remap;
+mod report;
 mod tray;
 
 use std::time::Duration;
@@ -334,6 +335,74 @@ fn open_backups(app: tauri::AppHandle) -> Result<(), String> {
     std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/* ---------- device reports ---------- */
+
+fn parse_usb_id(id: &str) -> Result<(u16, u16), String> {
+    let (v, p) = id.split_once(':').ok_or("That isn't a USB ID")?;
+    let hex = |s: &str| u16::from_str_radix(s, 16).map_err(|_| "That isn't a USB ID".to_string());
+    Ok((hex(v)?, hex(p)?))
+}
+
+/// Read-only facts about a device, for a report.
+#[tauri::command]
+async fn report_facts(usb_id: String) -> Result<report::Facts, String> {
+    let (vid, pid) = parse_usb_id(&usb_id)?;
+    tauri::async_runtime::spawn_blocking(move || report::facts(vid, pid)).await.map_err(|e| e.to_string())?
+}
+
+/// Starts recording presses from one device (the report's button walk).
+#[tauri::command]
+fn report_capture_start(state: State<AppState>, usb_id: String) -> Result<(), String> {
+    let (_, pid) = parse_usb_id(&usb_id)?;
+    state.engine.capture_start(pid);
+    Ok(())
+}
+
+/// Stops recording; returns (code, name) for each key or button pressed.
+#[tauri::command]
+fn report_capture_stop(state: State<AppState>) -> Vec<(u16, String)> {
+    state.engine.capture_stop().into_iter().map(|c| (c, key_name(c))).collect()
+}
+
+/// Light walk on a mouse: `zone` id lit in `color`, the others off; None
+/// for every zone 1-6 in `color`.
+#[tauri::command]
+fn report_light_mouse(state: State<AppState>, zone: Option<u8>, color: String) -> Result<(), String> {
+    let c = prism_core::Rgb::from_hex(&color).ok_or("Not a color")?;
+    let off = prism_core::Rgb::new(0, 0, 0);
+    let zones = (1..=6u8).map(|id| (id, if zone.map_or(true, |z| z == id) { c } else { off })).collect();
+    state.engine.test_light(Some(engine::TestLight::Mouse(zones)));
+    Ok(())
+}
+
+/// Light walk on a lighting controller: `channel` (0-based) lit in
+/// `color` on its first `leds` LEDs, the other channel off.
+#[tauri::command]
+fn report_light_node(state: State<AppState>, channel: Option<u8>, color: String, leds: usize) -> Result<(), String> {
+    let c = prism_core::Rgb::from_hex(&color).ok_or("Not a color")?;
+    let colors = (0..lighting_node::CHANNELS).map(|ch| if channel.map_or(true, |x| x == ch) { c } else { prism_core::Rgb::new(0, 0, 0) }).collect();
+    state.engine.test_light(Some(engine::TestLight::Node { colors, leds: leds.min(lighting_node::MAX_LEDS_PER_CHANNEL) }));
+    Ok(())
+}
+
+/// Ends a light walk: back to the effects.
+#[tauri::command]
+fn report_light_off(state: State<AppState>) {
+    state.engine.test_light(None);
+}
+
+/// Saves the reviewed report to Downloads; returns where.
+#[tauri::command]
+fn report_save(json: String, usb_id: String) -> Result<String, String> {
+    report::save(&json, &usb_id)
+}
+
+/// Opens GitHub's new-issue page for Prism (nothing is attached or sent).
+#[tauri::command]
+fn report_open_issue(product: String) -> Result<(), String> {
+    report::open_issue_page(&product)
+}
+
 /// Which device and tab to open on, from PRISM_START_VIEW ("keyboard:keys",
 /// "lighting:light", ...). Used for taking screenshots; unset normally.
 #[tauri::command]
@@ -451,6 +520,14 @@ fn main() {
             open_backups,
             delete_backup,
             start_view,
+            report_facts,
+            report_capture_start,
+            report_capture_stop,
+            report_light_mouse,
+            report_light_node,
+            report_light_off,
+            report_save,
+            report_open_issue,
             ui_log
         ])
         .build(tauri::generate_context!())

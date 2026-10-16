@@ -18,7 +18,7 @@ use prism_core::effects::{desk, node_layout, onboard_lights, render_layers_in, r
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
-use prism_core::lighting_node::{LightingNode, KEEPALIVE_INTERVAL};
+use prism_core::lighting_node::{self, LightingNode, KEEPALIVE_INTERVAL};
 use prism_core::nightsword::{self, Nightsword};
 use prism_core::Rgb;
 use serde::Serialize;
@@ -58,7 +58,30 @@ enum Msg {
     /// A key or button went down: (device's USB product ID, key code). Only
     /// used to start ripples; nothing is kept.
     Press(u16, u16),
+    /// Device report: record presses from this product (USB ID) and show
+    /// them on screen, until CaptureStop.
+    CaptureStart(u16),
+    CaptureStop(Sender<Vec<u16>>),
+    /// Device report: show these lights instead of the effects (None: back
+    /// to normal).
+    TestLight(Option<TestLight>),
     Stop,
+}
+
+/// Lights shown during a device report's light walk.
+#[derive(Debug, Clone)]
+pub enum TestLight {
+    /// Mouse zones by their id in the color message.
+    Mouse(Vec<(u8, Rgb)>),
+    /// One color per lighting controller channel, on the first `leds` LEDs.
+    Node { colors: Vec<Rgb>, leds: usize },
+}
+
+/// A press recorded for a device report, as shown on screen.
+#[derive(Clone, Serialize)]
+struct ReportPress {
+    code: u16,
+    name: String,
 }
 
 /// DPI ops as numbers, for bindings that notify the app.
@@ -191,6 +214,9 @@ impl Engine {
             // hears presses while a ripple layer is on.
             let mut ripples: Vec<Ripple> = Vec::new();
             let mut presses: u64 = 0;
+            // Device report: which product's presses to record, and the light walk.
+            let mut capture: Option<(u16, Vec<u16>)> = None;
+            let mut test_light: Option<TestLight> = None;
             let mut watcher: Option<prism_input::PressWatcher> = None;
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
@@ -215,6 +241,7 @@ impl Engine {
                 let want_presses = [&profile.layers, &profile.keyboard, &profile.mouse, &profile.gpu, &profile.motherboard]
                     .iter()
                     .any(|ls| ls.iter().any(|l| l.enabled && l.effect == Effect::Ripple));
+                let want_presses = want_presses || capture.is_some();
                 if want_presses != watcher.is_some() {
                     watcher = want_presses.then(prism_input::PressWatcher::start);
                     if !want_presses {
@@ -252,7 +279,11 @@ impl Engine {
                     // We do brightness ourselves, so the device stays at full.
                     (0..n.channels()).all(|ch| n.set_brightness(ch, 100).is_ok()).then_some(n)
                 });
-                if let Some(n) = &node.dev {
+                if let (Some(n), Some(TestLight::Node { colors, leds })) = (&node.dev, &test_light) {
+                    for (ch, c) in colors.iter().enumerate().take(n.channels() as usize) {
+                        let _ = n.set_colors(ch as u8, &vec![*c; (*leds).min(lighting_node::MAX_LEDS_PER_CHANNEL)]);
+                    }
+                } else if let Some(n) = &node.dev {
                     let sent = fans
                         .iter()
                         .enumerate()
@@ -273,7 +304,9 @@ impl Engine {
                 let had_mouse = mouse.dev.is_some();
                 mouse.reconnect(&mut api, |api| Nightsword::open_with(api, !resuming).ok());
                 resuming = false; // only the very first connection
-                if let Some(m) = mouse.dev.as_ref().filter(|m| zones.len() == m.model.zones.len()) {
+                if let (Some(m), Some(TestLight::Mouse(z))) = (&mouse.dev, &test_light) {
+                    let _ = m.set_zone_ids(z);
+                } else if let Some(m) = mouse.dev.as_ref().filter(|m| zones.len() == m.model.zones.len()) {
                     if m.set_zone_colors(zones).is_err() {
                         mouse.dev = None;
                     }
@@ -433,6 +466,21 @@ impl Engine {
                         };
                         let _ = done.send(r);
                     }
+                    Ok(Msg::CaptureStart(product)) => capture = Some((product, Vec::new())),
+                    Ok(Msg::CaptureStop(done)) => {
+                        let _ = done.send(capture.take().map(|c| c.1).unwrap_or_default());
+                    }
+                    Ok(Msg::TestLight(l)) => test_light = l,
+                    Ok(Msg::Press(product, code)) if capture.as_ref().is_some_and(|c| c.0 == product) => {
+                        // Only the presses of the device being reported, and
+                        // only while its button walk is on screen.
+                        if let Some((_, codes)) = capture.as_mut() {
+                            if !codes.contains(&code) && codes.len() < 300 {
+                                codes.push(code);
+                                let _ = app.emit("report-press", ReportPress { code, name: crate::key_name(code) });
+                            }
+                        }
+                    }
                     Ok(Msg::Press(product, code)) => {
                         // Where on the desk the press was.
                         let spot = match prism_core::lookup_model(product).map(|m| m.kind) {
@@ -582,6 +630,25 @@ impl Engine {
         let (tx, rx) = mpsc::channel();
         self.tx.send(Msg::KbSave(root, lighting, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
         rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the keyboard took too long".to_string())?
+    }
+
+    /// Device report: start recording presses from `product`.
+    pub fn capture_start(&self, product: u16) {
+        let _ = self.tx.send(Msg::CaptureStart(product));
+    }
+
+    /// Device report: stop recording and get the codes pressed.
+    pub fn capture_stop(&self) -> Vec<u16> {
+        let (tx, rx) = mpsc::channel();
+        if self.tx.send(Msg::CaptureStop(tx)).is_err() {
+            return vec![];
+        }
+        rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
+    }
+
+    /// Device report: show test lights (None: back to the effects).
+    pub fn test_light(&self, light: Option<TestLight>) {
+        let _ = self.tx.send(Msg::TestLight(light));
     }
 
     /// Seconds since effects started.

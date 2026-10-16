@@ -42,6 +42,16 @@ impl InputDevice {
         self.device.supported_keys().is_some_and(|k| k.iter().next().is_some())
     }
 
+    /// Every key or button code it says it can send (not what's pressed).
+    pub fn key_codes(&self) -> Vec<u16> {
+        self.device.supported_keys().map_or(vec![], |k| k.iter().map(|k| k.code()).collect())
+    }
+
+    /// Whether it moves a pointer or scrolls.
+    pub fn has_movement(&self) -> bool {
+        self.device.supported_relative_axes().is_some_and(|r| r.iter().next().is_some())
+    }
+
     fn sends(&self, code: u16) -> bool {
         self.device.supported_keys().is_some_and(|k| k.contains(Key::new(code)))
     }

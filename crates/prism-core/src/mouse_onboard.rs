@@ -6,8 +6,8 @@
 //!   3 bytes per button: [button number, key number, 0x80]. 0x80 means
 //!   "acts as a keyboard key"; other kinds (media) aren't worked out yet.
 //!   Button numbers count from 0 in the order of [`nightsword::BUTTONS`]
-//!   (checked on the mouse: Left 0, Forward 4, DPI Down 6, Sniper 7,
-//!   Profile Up 8, Profile Down 9; the rest follow the order).
+//!   (checked on the mouse: Left 0, Forward 4, DPI Up 5, DPI Down 6,
+//!   Sniper 7, Profile Up 8, Profile Down 9; the rest follow the order).
 //! - PROFILE.DAT attaches macros to buttons: `50 00`, a count (u16), then
 //!   16 bytes per macro: [button number, macro file name ("M000"), ...].
 //!   A macro wins over PROFILE.MAP, so saving a key onto a button removes

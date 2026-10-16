@@ -49,6 +49,9 @@ pub enum Effect {
     /// or a random one. The rings travel across every device that has this
     /// effect.
     Ripple,
+    /// Each pressed key lights up, then fades back to the layers below
+    /// (black if none). Only that key. Colors as for [`Effect::Ripple`].
+    KeyGlow,
 }
 
 impl Effect {
@@ -56,7 +59,7 @@ impl Effect {
     pub fn is_animated(self) -> bool {
         // A ripple only moves after a key press; the engine keeps drawing
         // while one is spreading.
-        !matches!(self, Effect::Static | Effect::Gradient | Effect::Ripple)
+        !matches!(self, Effect::Static | Effect::Gradient | Effect::Ripple | Effect::KeyGlow)
     }
 }
 
@@ -529,7 +532,7 @@ pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -
     let still: Vec<Rgb> = render_layers(layers, surface, master, t).concat();
     let mut top: Vec<Option<usize>> = vec![None; surface.leds.len()];
     // Ripples can't play without Prism, so they don't count.
-    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && l.effect != Effect::Ripple) {
+    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && !matches!(l.effect, Effect::Ripple | Effect::KeyGlow)) {
         match &layer.target {
             Target::All => top.iter_mut().for_each(|t| *t = Some(n)),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(|i| top[i] = Some(n)),
@@ -560,6 +563,9 @@ pub struct Ripple {
     pub y: f64,
     /// Which press this was (0, 1, 2...), so every device gives it the same color.
     pub n: u64,
+    /// Only for key glows, not rings (the other lights of a key with
+    /// several, like the space bar).
+    pub glow_only: bool,
 }
 
 impl Layer {
@@ -606,6 +612,15 @@ fn ripple_speed(speed: u8) -> f64 {
     0.12 * speed as f64
 }
 
+/// A key glow lights LEDs this close to the press (in desk units): the key
+/// itself, not its neighbours.
+const GLOW_RADIUS: f64 = 0.01;
+
+/// How long a key glow takes to fade, in seconds, for a layer `speed` of 1-10.
+fn glow_fade(speed: u8) -> f64 {
+    2.2 - 0.2 * speed as f64
+}
+
 /// Whether a ripple started at `t0` is still spreading at `t`, at the
 /// fastest speed.
 pub fn ripple_alive(r: &Ripple, t: f64) -> bool {
@@ -625,11 +640,13 @@ pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64,
 
     for layer in layers.iter().filter(|l| l.enabled) {
         let level = layer.brightness as f32 / 100.0;
-        if layer.effect == Effect::Ripple {
-            // Only the rings are painted, over what the layers below show.
+        if matches!(layer.effect, Effect::Ripple | Effect::KeyGlow) {
+            // Only the rings (or glowing keys) are painted, over what the
+            // layers below show.
             let Some(w) = world else { continue };
             let mut ring = |i: usize| {
-                if let Some((c, glow)) = ripple_at(layer, &surface.leds[i], t, w) {
+                let found = if layer.effect == Effect::Ripple { ripple_at(layer, &surface.leds[i], t, w) } else { glow_at(layer, &surface.leds[i], t, w) };
+                if let Some((c, glow)) = found {
                     flat[i] = flat[i].mix(c, glow as f32 * level);
                 }
             };
@@ -674,13 +691,27 @@ fn ripple_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
     let v = ripple_speed(l.speed);
     w.ripples
         .iter()
-        .filter(|r| t >= r.t0)
+        .filter(|r| t >= r.t0 && !r.glow_only)
         .map(|r| {
             let radius = (t - r.t0) * v;
             let d = ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt();
             let ring = (1.0 - (d - radius).abs() / RIPPLE_WIDTH).max(0.0);
             (r, ring * (1.0 - radius / RIPPLE_REACH).max(0.0))
         })
+        .filter(|(_, glow)| *glow > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(r, glow)| (l.ripple_color(r.n), glow))
+}
+
+/// The brightest key glow on one LED: its color and how strongly (0-1).
+fn glow_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
+    let [px, py, pw, ph] = w.place;
+    let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
+    let fade = glow_fade(l.speed);
+    w.ripples
+        .iter()
+        .filter(|r| t >= r.t0 && ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt() < GLOW_RADIUS)
+        .map(|r| (r, (1.0 - (t - r.t0) / fade).max(0.0)))
         .filter(|(_, glow)| *glow > 0.0)
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(r, glow)| (l.ripple_color(r.n), glow))
@@ -722,7 +753,7 @@ fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, _world: Option<&W
             if (t * speed * 0.8).rem_euclid(1.0) < 0.25 { l.color1 } else { l.color2 }
         }
         // Drawn over the layers below in render_layers_in, never on its own.
-        Effect::Ripple => BLACK,
+        Effect::Ripple | Effect::KeyGlow => BLACK,
     }
 }
 
@@ -957,7 +988,7 @@ mod tests {
         let ripple = Layer { effect: Effect::Ripple, color1: WHITE, palette: vec![HOT_PINK], speed: 5, ..Default::default() };
         // Press 0 at the keyboard's left end: the left key lights first, the
         // right one (0.4 desk units away) once the ring gets there.
-        let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 0 }];
+        let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 0, glow_only: false }];
         let w = World { ripples: &r, place: desk::KEYBOARD };
         let at = |t: f64, rs: &World| render_layers_in(&[base.clone(), ripple.clone()], &kb, 100, t, Some(rs))[0].clone();
         assert_eq!(at(0.0, &w), vec![WHITE, PURPLE]); // ring color over the purple below
@@ -965,7 +996,7 @@ mod tests {
         assert!(at(reach, &w)[1].g > 150, "{:?}", at(reach, &w));
         assert_eq!(at(reach, &w)[0], PURPLE);
         // Press 1 takes the next color.
-        let r1 = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 1 }];
+        let r1 = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 1, glow_only: false }];
         assert_eq!(at(0.0, &World { ripples: &r1, place: desk::KEYBOARD })[0], HOT_PINK);
         // Without ripples the layers below show untouched.
         assert!(render_layers(&[base.clone(), ripple.clone()], &kb, 100, 1.0)[0].iter().all(|&c| c == PURPLE));
@@ -976,6 +1007,23 @@ mod tests {
         assert_ne!(rnd.ripple_color(0), rnd.ripple_color(1));
         let c = rnd.ripple_color(7);
         assert_eq!(c.r.max(c.g).max(c.b), 255);
+    }
+
+    #[test]
+    fn key_glow_lights_only_the_pressed_key_then_fades() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
+        let glow = Layer { effect: Effect::KeyGlow, color1: WHITE, speed: 5, ..Default::default() };
+        // A press exactly on the middle key (desk x = 0.30 + 0.5 * 0.40).
+        let r = [Ripple { t0: 0.0, x: 0.50, y: 0.62, n: 0, glow_only: true }];
+        let w = World { ripples: &r, place: desk::KEYBOARD };
+        let at = |t: f64| render_layers_in(&[glow.clone()], &kb, 100, t, Some(&w))[0].clone();
+        assert_eq!(at(0.0), vec![BLACK, WHITE, BLACK]);
+        assert!(at(0.6)[1].r > 0 && at(0.6)[1].r < 255);
+        assert_eq!(at(1.3), vec![BLACK, BLACK, BLACK]); // faded (1.2 s at speed 5)
+        // A glow-only press makes no ring.
+        let ring = Layer { effect: Effect::Ripple, color1: WHITE, ..Default::default() };
+        assert!(render_layers_in(&[ring], &kb, 100, 0.0, Some(&w))[0].iter().all(|&c| c == BLACK));
+        assert!(!Effect::KeyGlow.is_animated());
     }
 
     #[test]

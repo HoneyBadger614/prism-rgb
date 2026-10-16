@@ -23,6 +23,7 @@ const Lighting = (() => {
     "color-cycle": { name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
     comet: { name: "Comet", desc: "A bright head with a fading tail", c1: "Head", c2: "Background", spread: true, speed: true, start: { color1: PINK, color2: "#140624", spread: "per-fan" } },
     strobe: { name: "Strobe", desc: "Fast flashing", c1: "Flash", c2: "Between", speed: true, start: { color1: WHITE, color2: "#000000", speed: 4 } },
+    "key-glow": { name: "Key glow", desc: "Each key you press lights up, then fades. Only that key", c1: "Glow 1", palette: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
     ripple: { name: "Typing ripple", desc: "Rings spread from each key you press, over your other layers. Add it to each device you want them on", c1: "Ripple 1", palette: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
   };
 
@@ -417,6 +418,7 @@ const Lighting = (() => {
       case "rainbow": case "color-cycle": return "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)";
       case "comet": return `linear-gradient(90deg, ${c2} 0 45%, ${c1} 70%, ${c2} 72%)`;
       case "strobe": return c1;
+      case "key-glow": return `radial-gradient(circle at 50% 50%, ${c1} 0 18%, #140624 40%)`;
       case "ripple": { const bg = "#140624"; return `radial-gradient(circle, ${bg} 0 18%, ${c1} 22% 30%, ${bg} 34% 48%, ${c1} 52% 58%, ${bg} 62%)`; }
     }
     return c1;
@@ -1280,7 +1282,7 @@ const Lighting = (() => {
       const chip = el("span", "chip");
       chip.style.setProperty("--chip", c);
       const txt = el("span");
-      txt.append(el("span", "slot-name", `Ripple ${i + 2}`), el("span", "slot-hex", c));
+      txt.append(el("span", "slot-name", `${(fx.c1 || "Color 1").replace(/ 1$/, "")} ${i + 2}`), el("span", "slot-hex", c));
       const x = el("span", "chip-x", "×");
       x.title = "Remove this color";
       x.addEventListener("click", (e) => {

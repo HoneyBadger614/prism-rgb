@@ -240,7 +240,7 @@ impl Engine {
                 ripples.retain(|r| ripple_alive(r, t));
                 let want_presses = [&profile.layers, &profile.keyboard, &profile.mouse, &profile.gpu, &profile.motherboard]
                     .iter()
-                    .any(|ls| ls.iter().any(|l| l.enabled && l.effect == Effect::Ripple));
+                    .any(|ls| ls.iter().any(|l| l.enabled && matches!(l.effect, Effect::Ripple | Effect::KeyGlow)));
                 let want_presses = want_presses || capture.is_some();
                 if want_presses != watcher.is_some() {
                     watcher = want_presses.then(prism_input::PressWatcher::start);
@@ -482,23 +482,36 @@ impl Engine {
                         }
                     }
                     Ok(Msg::Press(product, code)) => {
-                        // Where on the desk the press was.
-                        let spot = match prism_core::lookup_model(product).map(|m| m.kind) {
-                            Some(prism_core::DeviceKind::Keyboard) => devices.keys.iter().position(|k| k.code == code).map(|i| {
-                                let g = devices.keyboard.leds[i].lin;
-                                let [x, y, w, h] = desk::KEYBOARD;
-                                (x + g[0] * w, y + g[1] * h)
-                            }),
+                        // Where on the desk the press was: every light of the
+                        // key (the space bar has three), the first starting
+                        // the ring.
+                        let spots: Vec<(f64, f64)> = match prism_core::lookup_model(product).map(|m| m.kind) {
+                            Some(prism_core::DeviceKind::Keyboard) => devices
+                                .keys
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, k)| k.code == code)
+                                .map(|(i, _)| {
+                                    let g = devices.keyboard.leds[i].lin;
+                                    let [x, y, w, h] = desk::KEYBOARD;
+                                    (x + g[0] * w, y + g[1] * h)
+                                })
+                                .collect(),
                             Some(prism_core::DeviceKind::Mouse) => {
+                                // the front zone, where the buttons are
+                                let g = devices.mouse.leds.first().map_or([0.5, 0.0], |l| l.lin);
                                 let [x, y, w, h] = desk::MOUSE;
-                                Some((x + w / 2.0, y + h * 0.2))
+                                vec![(x + g[0] * w, y + g[1] * h)]
                             }
-                            _ => None,
+                            _ => vec![],
                         };
-                        if let (Some((x, y)), true) = (spot, watcher.is_some()) {
-                            ripples.push(Ripple { t0: start.elapsed().as_secs_f64(), x, y, n: presses });
+                        if watcher.is_some() && !spots.is_empty() {
+                            let t0 = start.elapsed().as_secs_f64();
+                            for (i, (x, y)) in spots.into_iter().enumerate() {
+                                ripples.push(Ripple { t0, x, y, n: presses, glow_only: i > 0 });
+                            }
                             presses += 1;
-                            if ripples.len() > 48 {
+                            while ripples.len() > 64 {
                                 ripples.remove(0);
                             }
                         }

@@ -314,6 +314,19 @@ fn list_backups(app: tauri::AppHandle) -> Vec<backup::Manifest> {
 }
 
 /// Opens the backups folder in the file manager.
+/// Deletes one backup folder from this computer (the devices aren't
+/// touched). The screen asks "are you sure?" first.
+#[tauri::command]
+fn delete_backup(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let dir = backup_dir(&app, &name)?;
+    // Only a real folder directly inside the backups folder, never a link.
+    let meta = std::fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
+    if !meta.is_dir() || dir.parent() != Some(backup::root(&config_dir(&app)?).as_path()) {
+        return Err("That isn't a backup folder".into());
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("Couldn't delete the backup: {e}"))
+}
+
 #[tauri::command]
 fn open_backups(app: tauri::AppHandle) -> Result<(), String> {
     let dir = backup::root(&config_dir(&app)?);
@@ -429,6 +442,7 @@ fn main() {
             kb_save_plan,
             kb_save,
             open_backups,
+            delete_backup,
             ui_log
         ])
         .build(tauri::generate_context!())

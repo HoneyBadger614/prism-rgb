@@ -82,6 +82,37 @@ const Onboard = (() => {
     box.lastChild.append(...(nothing ? [no] : [yes, no]));
   }
 
+  // "Are you sure?" under the row, then delete the backup folder.
+  function askDelete(b, row) {
+    if (row.nextElementSibling?.classList.contains("delete-box")) return;
+    const box = el("div", "restore-box delete-box");
+    const yes = el("button", "btn danger", "Yes, delete it");
+    const no = el("button", "mini", "Cancel");
+    const done = () => box.remove();
+    no.addEventListener("click", done);
+    yes.addEventListener("click", async () => {
+      yes.disabled = no.disabled = true;
+      try {
+        await invoke("delete_backup", { name: b.name });
+        renderList();
+      } catch (e) {
+        box.replaceChildren(el("p", "restore-q", `Couldn't delete it: ${e}`));
+        const ok = el("button", "mini", "Close");
+        ok.addEventListener("click", done);
+        box.append(ok);
+      }
+    });
+    const actions = el("div", "onboard-actions");
+    actions.append(yes, no);
+    box.append(
+      el("p", "restore-q", `Are you sure you want to delete the backup from ${b.created}?`),
+      el("p", "hint", "This only removes Prism's copy on this computer; nothing on your devices changes. It can't be undone, so you won't be able to restore from it afterwards."),
+      actions,
+    );
+    row.after(box);
+    yes.focus();
+  }
+
   async function renderList() {
     const backups = await invoke("list_backups");
     $("backup-list").replaceChildren(...(backups.length ? backups.map((b) => {
@@ -91,7 +122,11 @@ const Onboard = (() => {
       text.append(el("span", "layer-name", b.created), el("span", "layer-meta", b.note ? `${b.note} · ${meta}` : meta));
       const restore = el("button", "mini restore-btn", "Restore…");
       restore.addEventListener("click", () => askRestore(b, row));
-      row.append(text, restore);
+      const del = el("button", "mini danger", "Delete…");
+      del.addEventListener("click", () => askDelete(b, row));
+      const buttons = el("div", "backup-buttons");
+      buttons.append(restore, del);
+      row.append(text, buttons);
       return row;
     }) : [el("p", "hint", "No backups yet. Press Back up now to make your first one.")]));
   }

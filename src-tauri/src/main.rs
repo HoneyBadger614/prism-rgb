@@ -334,6 +334,13 @@ fn open_backups(app: tauri::AppHandle) -> Result<(), String> {
     std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Which device and tab to open on, from PRISM_START_VIEW ("keyboard:keys",
+/// "lighting:light", ...). Used for taking screenshots; unset normally.
+#[tauri::command]
+fn start_view() -> Option<String> {
+    std::env::var("PRISM_START_VIEW").ok().filter(|v| v.len() < 40)
+}
+
 /// Writes a screen-side error to Prism's own log (stderr), for debugging.
 /// Nothing leaves the computer.
 #[tauri::command]
@@ -443,6 +450,7 @@ fn main() {
             kb_save,
             open_backups,
             delete_backup,
+            start_view,
             ui_log
         ])
         .build(tauri::generate_context!())

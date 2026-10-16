@@ -201,4 +201,17 @@ async function scan() {
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { tab = t.dataset.t; render(); }));
 $("rescan").addEventListener("click", scan);
-Lighting.init().then(() => { Bindings.init(); Onboard.init(); scan(); });
+Lighting.init().then(async () => {
+  Bindings.init();
+  Onboard.init();
+  await scan();
+  // Open on a given device and tab if asked (for screenshots).
+  const view = await invoke("start_view").catch(() => null);
+  if (view) {
+    const [kind, t] = view.split(":");
+    const i = devices.findIndex((d) => d.kind === kind);
+    if (i >= 0) selected = i;
+    if (["light", "keys", "mem"].includes(t)) tab = t;
+    render();
+  }
+});

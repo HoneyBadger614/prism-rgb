@@ -1,0 +1,21 @@
+# Lets the person logged in at the computer use the devices Prism controls,
+# without root. Install with:
+#   sudo install -Dm644 packaging/60-prism.rules /etc/udev/rules.d/60-prism.rules
+#   sudo udevadm control --reload && sudo udevadm trigger
+# (then unplug and replug the devices, or restart).
+
+# Corsair USB devices (lighting, onboard memory)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", TAG+="uaccess"
+
+# ASUS Aura motherboard lighting controller
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1939", TAG+="uaccess"
+
+# Key and button presses from Corsair keyboards and mice (key bindings,
+# typing ripples). Note: this lets programs you run read these devices.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="1b1c", TAG+="uaccess"
+
+# Prism's virtual keyboard, which types the keys bindings send.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
+
+# NVIDIA graphics card lighting: only the one bus the lighting chip is on.
+SUBSYSTEM=="i2c-dev", ATTR{name}=="NVIDIA i2c adapter 1 at *", TAG+="uaccess"

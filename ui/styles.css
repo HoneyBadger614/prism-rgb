@@ -478,10 +478,12 @@ select.text-input { width: 100%; }
 .ripple-note p { margin: 0; }
 .ripple-note p + p { margin-top: 4px; color: var(--muted); }
 
-.palette-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
-.palette-row .slot { position: relative; }
+/* A ripple's extra colors sit in the same two-column grid as Color 1. */
+.palette-row { display: contents; }
+.palette-row .slot { position: relative; min-width: 0; }
 .palette-row .chip-x { position: absolute; top: 4px; right: 4px; }
-.palette-add { align-self: center; justify-self: start; }
+.palette-add { justify-content: center; min-height: 48px; border-style: dashed; color: var(--muted); font-size: 13px; font-weight: 600; }
+.palette-add:hover { color: var(--text); }
 #random-row { margin-top: 10px; }
 
 .backup-buttons { display: flex; gap: 6px; flex: none; }

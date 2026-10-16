@@ -1299,7 +1299,7 @@ const Lighting = (() => {
       b.addEventListener("click", () => { activeSlot = `p${i}`; hsv = null; syncEditor(); });
       return b;
     }), ...(palette.length < 15 ? [(() => {
-      const add = el("button", "mini palette-add", "+ Add a color");
+      const add = el("button", "slot palette-add", "+ Add a color");
       add.addEventListener("click", () => {
         const pick = QUICK_COLORS[(palette.length + 1) % QUICK_COLORS.length][1];
         activeSlot = `p${palette.length}`;

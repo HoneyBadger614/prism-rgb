@@ -163,7 +163,7 @@ function render() {
   $("visual").hidden = nodeLighting || keyBindings || onboard;
   $("soon").hidden = nodeLighting || keyBindings || onboard;
   if (onboard) {
-    Onboard.show();
+    Onboard.show(d.kind);
     return;
   }
   if (nodeLighting) {

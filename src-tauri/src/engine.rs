@@ -48,6 +48,11 @@ enum Msg {
     /// Back up into the folder, then save the active profile into the
     /// mouse's onboard profile folder.
     MouseSave(u8, PathBuf, String, Sender<Result<crate::mouse_save::SaveReport, String>>),
+    /// What "Save to keyboard" would write for the active profile (read-only).
+    KbPlan(Sender<Result<crate::kb_save::SavePlan, String>>),
+    /// Back up into the folder, then save the active profile into the
+    /// keyboard's onboard profile with this root file.
+    KbSave(u16, PathBuf, String, Sender<Result<crate::kb_save::SaveReport, String>>),
     Stop,
 }
 
@@ -355,6 +360,36 @@ impl Engine {
                         };
                         let _ = done.send(r);
                     }
+                    Ok(Msg::KbPlan(done)) => {
+                        let profile = cfg.active_profile().unwrap_or(&empty);
+                        let r = match &kb.dev {
+                            Some(k) => crate::kb_save::plan(k, &devices.keys, profile, crate::key_name),
+                            None => Err("The keyboard isn't connected".to_string()),
+                        };
+                        let _ = done.send(r);
+                    }
+                    Ok(Msg::KbSave(root, dir, name, done)) => {
+                        let profile = cfg.active_profile().unwrap_or(&empty).clone();
+                        let r = match &kb.dev {
+                            Some(k) => {
+                                let note = Some(format!("Made automatically before saving “{}” to the keyboard", profile.name));
+                                let b = crate::backup::take(Some(k), None, None, &dir, name, note);
+                                if !b.keyboard.read || b.keyboard.error.is_some() || b.keyboard.files.is_empty() {
+                                    Err(format!("The backup didn't work ({}), so nothing was written", b.keyboard.error.unwrap_or_else(|| "no files".into())))
+                                } else {
+                                    let existing: Vec<u16> = b
+                                        .keyboard
+                                        .files
+                                        .iter()
+                                        .filter_map(|(f, _)| f.strip_suffix(".bin").and_then(|h| u16::from_str_radix(h, 16).ok()))
+                                        .collect();
+                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, b.created)
+                                }
+                            }
+                            None => Err("The keyboard isn't connected".to_string()),
+                        };
+                        let _ = done.send(r);
+                    }
                     Ok(Msg::Flush(done)) => {
                         save(&save_to, &cfg);
                         unsaved_since = None;
@@ -466,6 +501,22 @@ impl Engine {
         let (tx, rx) = mpsc::channel();
         self.tx.send(Msg::MouseSave(folder, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
         rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the mouse took too long".to_string())?
+    }
+
+    /// What saving the active profile to the keyboard would write (read-only).
+    pub fn kb_plan(&self) -> Result<crate::kb_save::SavePlan, String> {
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Msg::KbPlan(tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(60)).map_err(|_| "Reading the keyboard took too long".to_string())?
+    }
+
+    /// Saves the active profile's key bindings into the keyboard's onboard
+    /// profile `root`, after a fresh backup.
+    pub fn kb_save(&self, root: u16, config_dir: &std::path::Path) -> Result<crate::kb_save::SaveReport, String> {
+        let (name, dir) = crate::backup::new_folder(config_dir, "_before-save").map_err(|e| e.to_string())?;
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Msg::KbSave(root, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the keyboard took too long".to_string())?
     }
 
     /// Seconds since effects started.

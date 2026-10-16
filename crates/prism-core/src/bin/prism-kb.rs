@@ -40,8 +40,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if what == "backup" {
         let dir = std::path::PathBuf::from(args.next().ok_or("give a folder to save into")?);
         std::fs::create_dir_all(&dir)?;
-        // Opened without taking over the lighting: reading only.
-        let kb = K65Mini::open_with(&api, false)?;
+        // The keyboard only opens its files to the program in control, so
+        // take control for the read and hand it back afterwards.
+        let kb = K65Mini::open_with(&api, true)?;
         for (id, r) in kb.read_all_files() {
             match r {
                 Ok(data) => {
@@ -51,6 +52,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => println!("  file {id:#06x}: {e}"),
             }
         }
+        kb.release()?;
         return Ok(());
     }
     if what == "write" {

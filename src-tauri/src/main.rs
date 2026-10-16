@@ -4,6 +4,7 @@ mod apps;
 mod autostart;
 mod backup;
 mod engine;
+mod kb_save;
 mod mouse_buttons;
 mod mouse_save;
 mod remap;
@@ -256,6 +257,26 @@ async fn mouse_save(app: tauri::AppHandle, folder: u8) -> Result<mouse_save::Sav
     .map_err(|e| e.to_string())?
 }
 
+/// What "Save to keyboard" would write for the active profile. Read-only.
+#[tauri::command]
+async fn kb_save_plan(app: tauri::AppHandle) -> Result<kb_save::SavePlan, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().engine.kb_plan())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Saves the active profile's key bindings into one of the keyboard's
+/// onboard profiles, after a backup. Changes the keyboard's memory.
+#[tauri::command]
+async fn kb_save(app: tauri::AppHandle, root: u16) -> Result<kb_save::SaveReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = config_dir(&app)?;
+        app.state::<AppState>().engine.kb_save(root, &dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What restoring a backup would change on the devices. Read-only.
 #[tauri::command]
 async fn restore_plan(app: tauri::AppHandle, name: String) -> Result<backup::Plan, String> {
@@ -399,6 +420,8 @@ fn main() {
             restore_backup,
             mouse_save_plan,
             mouse_save,
+            kb_save_plan,
+            kb_save,
             open_backups,
             ui_log
         ])

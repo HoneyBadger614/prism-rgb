@@ -13,6 +13,7 @@ pub mod asus_aura;
 pub mod bindings;
 pub mod effects;
 pub mod k65_mini;
+pub mod kb_onboard;
 pub mod lighting_node;
 pub mod mouse_onboard;
 pub mod msi_gpu;

@@ -113,68 +113,86 @@ const Onboard = (() => {
     renderList();
   }
 
-  /* ---------- save to mouse ---------- */
+  /* ---------- save to device ---------- */
 
-  async function checkMouse() {
-    const box = $("mouse-plan");
-    $("mouse-check").disabled = true;
-    $("mouse-status").textContent = "Reading the mouse's profiles…";
+  let kind = "mouse"; // which device's Save section is showing
+  const NAMES = { mouse: "mouse", keyboard: "keyboard" };
+
+  function showSave() {
+    $("save-title").textContent = `Save to ${NAMES[kind]}`;
+    $("save-text").innerHTML = kind === "mouse"
+      ? "Puts the active profile's <b>button bindings</b> and <b>DPI</b> into one of the mouse's own profiles, so they work when Prism isn't running, even on another computer. Prism shows what will be saved and backs up the mouse first."
+      : "Puts the active profile's <b>key bindings</b> into one of the keyboard's own profiles, so they work when Prism isn't running, even on another computer. Prism shows what will be saved and backs up the keyboard first.";
+    $("save-check").textContent = "Check what would be saved";
+    $("save-status").textContent = "";
+    $("save-plan").replaceChildren();
+  }
+
+  async function checkSave() {
+    const box = $("save-plan");
+    const dev = NAMES[kind];
+    $("save-check").disabled = true;
+    $("save-status").textContent = `Reading the ${dev}'s profiles…`;
     box.replaceChildren();
     let plan;
     try {
-      plan = await invoke("mouse_save_plan");
+      plan = await invoke(kind === "mouse" ? "mouse_save_plan" : "kb_save_plan");
     } catch (e) {
-      $("mouse-status").textContent = `Couldn't check: ${e}`;
-      $("mouse-check").disabled = false;
+      $("save-status").textContent = `Couldn't check: ${e}`;
+      $("save-check").disabled = false;
       return;
     }
-    $("mouse-status").textContent = "";
-    $("mouse-check").disabled = false;
+    $("save-status").textContent = "";
+    $("save-check").disabled = false;
     if (!plan.profiles.length) {
-      box.append(el("p", "hint", "The mouse didn't list any profiles, so there's nowhere to save."));
+      box.append(el("p", "hint", `The ${dev} didn't list any profiles, so there's nowhere to save.`));
       return;
     }
 
     const name = Lighting.profile().name;
     const lines = el("ul", "restore-lines");
     if (plan.saved.length) plan.saved.forEach(([b, k]) => lines.append(el("li", null, `${b} → ${k}`)));
-    else lines.append(el("li", null, "No button keys (buttons will do what they normally do)"));
-    if (plan.dpi) {
-      const [sniper, [s1, s2, s3]] = plan.dpi;
-      lines.append(el("li", null, `DPI stages ${s1} / ${s2} / ${s3}, sniper ${sniper}`));
-    } else {
-      lines.append(el("li", null, "DPI: left as it is (DPI isn't turned on in this profile)"));
+    else lines.append(el("li", null, kind === "mouse" ? "No button bindings (buttons will do what they normally do)" : "No key bindings (keys will type what they normally do)"));
+    if (kind === "mouse") {
+      if (plan.dpi) {
+        const [sniper, [s1, s2, s3]] = plan.dpi;
+        lines.append(el("li", null, `DPI stages ${s1} / ${s2} / ${s3}, sniper ${sniper}`));
+      } else {
+        lines.append(el("li", null, "DPI: left as it is (DPI isn't turned on in this profile)"));
+      }
     }
     const skipped = el("ul", "restore-lines");
     plan.skipped.forEach(([b, why]) => skipped.append(el("li", null, `${b}: ${why}`)));
 
+    const id = (p) => (kind === "mouse" ? p.folder : p.root);
     const pick = el("div", "seg");
     pick.style.gridTemplateColumns = `repeat(${Math.min(plan.profiles.length, 4)}, 1fr)`;
-    let folder = plan.profiles[0].folder;
+    let target = id(plan.profiles[0]);
     plan.profiles.forEach((p) => {
       const b = el("button", null, p.name);
-      b.title = `Holds now: DPI ${p.stages.join(" / ")}, sniper ${p.sniper}`;
-      b.setAttribute("aria-pressed", String(p.folder === folder));
+      b.title = kind === "mouse" ? `Holds now: DPI ${p.stages.join(" / ")}, sniper ${p.sniper}` : `Holds now: ${count(p.bound, "bound key")}`;
+      b.setAttribute("aria-pressed", String(id(p) === target));
       b.addEventListener("click", () => {
-        folder = p.folder;
+        target = id(p);
         pick.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
       });
       pick.append(b);
     });
 
-    const save = el("button", "btn", "Save to mouse");
+    const save = el("button", "btn", `Save to ${dev}`);
     const cancel = el("button", "mini", "Cancel");
     cancel.addEventListener("click", () => box.replaceChildren());
     save.addEventListener("click", async () => {
       save.disabled = cancel.disabled = true;
       pick.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      $("mouse-status").textContent = "Backing up the mouse, then saving…";
+      $("save-status").textContent = `Backing up the ${dev}, then saving…`;
       try {
-        const r = await invoke("mouse_save", { folder });
-        box.replaceChildren(el("p", "restore-q", `Saved to “${r.profile}”: ${count(r.buttons, "button key")}${r.dpi ? " and DPI" : ""}, and checked by reading it back. A backup (${r.backup}) was made first, so this can be undone.`));
-        $("mouse-status").textContent = "";
+        const r = kind === "mouse" ? await invoke("mouse_save", { folder: target }) : await invoke("kb_save", { root: target });
+        const what = kind === "mouse" ? `${count(r.buttons, "button binding")}${r.dpi ? " and DPI" : ""}` : count(r.keys, "key binding");
+        box.replaceChildren(el("p", "restore-q", `Saved to “${r.profile}”: ${what}, and checked by reading it back. A backup (${r.backup}) was made first, so this can be undone.`));
+        $("save-status").textContent = "";
       } catch (e) {
-        $("mouse-status").textContent = `Couldn't save: ${e}`;
+        $("save-status").textContent = `Couldn't save: ${e}`;
         save.disabled = cancel.disabled = false;
       }
       renderList();
@@ -184,21 +202,30 @@ const Onboard = (() => {
       el("p", "restore-q", `From your Prism profile “${name}”, this will be saved:`),
       lines,
       ...(plan.skipped.length ? [el("p", "hint", "These won't be saved (they still work while Prism is running):"), skipped] : []),
-      el("p", "restore-q", "Into which of the mouse's profiles?"),
+      el("p", "restore-q", `Into which of the ${dev}'s profiles?`),
       pick,
-      el("p", "hint", "This replaces that profile's button keys (and DPI, if shown above). Lighting there isn't changed."),
+      el("p", "hint", kind === "mouse"
+        ? "This replaces that profile's button bindings (and DPI, if shown above). Lighting there isn't changed."
+        : "This replaces that profile's key bindings. Lighting there isn't changed."),
       el("div", "onboard-actions"),
     );
     box.lastChild.append(save, cancel);
   }
 
   function init() {
-    $("mouse-check").addEventListener("click", checkMouse);
+    $("save-check").addEventListener("click", checkSave);
     $("backup-now").addEventListener("click", backupNow);
     $("backup-open").addEventListener("click", () => invoke("open_backups").catch((e) => {
       $("backup-status").textContent = `Couldn't open the folder: ${e}`;
     }));
   }
 
-  return { init, show: renderList };
+  // `which` is "keyboard" or "mouse": the device whose Save section shows.
+  function show(which) {
+    if (which && which !== kind) kind = which;
+    showSave();
+    renderList();
+  }
+
+  return { init, show };
 })();

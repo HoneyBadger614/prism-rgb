@@ -87,13 +87,13 @@
             <p class="hint"><b>Restore…</b> puts a backup back onto your devices: Prism shows what would change, asks first, and makes a fresh backup before writing.</p>
           </section>
           <section class="layers onboard-card">
-            <div class="layers-head"><span class="label">Save to mouse</span></div>
-            <p class="onboard-text">Puts the active profile's <b>button keys</b> and <b>DPI</b> into one of the mouse's own profiles, so they work when Prism isn't running, even on another computer. Prism shows what will be saved and backs up the mouse first.</p>
+            <div class="layers-head"><span class="label" id="save-title">Save to mouse</span></div>
+            <p class="onboard-text" id="save-text"></p>
             <div class="onboard-actions">
-              <button class="btn" id="mouse-check">Check what would be saved</button>
-              <span class="hint" id="mouse-status" role="status"></span>
+              <button class="btn" id="save-check">Check what would be saved</button>
+              <span class="hint" id="save-status" role="status"></span>
             </div>
-            <div id="mouse-plan"></div>
+            <div id="save-plan"></div>
           </section>
           <section class="layers">
             <div class="layers-head"><span class="label">Your backups</span></div>

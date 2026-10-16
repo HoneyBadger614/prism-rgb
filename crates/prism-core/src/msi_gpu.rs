@@ -118,8 +118,15 @@ impl Saved {
 pub struct MsiGpu {
     file: File,
     saved: Saved,
-    last: Option<Rgb>,
+    /// What the card is showing (LED-corrected), to send only changes.
+    shown: Option<Rgb>,
+    last_write: Option<std::time::Instant>,
 }
+
+/// The card is updated at most this often. Each I2C message costs about
+/// 1 ms of CPU (the NVIDIA driver waits on the bus), and one color doesn't
+/// need more than 10 updates a second to look smooth.
+pub const MIN_UPDATE_GAP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Where the card's original look is kept while Prism has it. This survives
 /// Prism restarting itself (the card is still showing Prism's colors then),
@@ -137,7 +144,7 @@ impl MsiGpu {
         if unsafe { libc::ioctl(file.as_raw_fd(), I2C_SLAVE, ADDRESS as libc::c_ulong) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let mut gpu = Self { file, saved: Saved { mode: 0, color: [0; 3], brightness: 0 }, last: None };
+        let mut gpu = Self { file, saved: Saved { mode: 0, color: [0; 3], brightness: 0 }, shown: None, last_write: None };
 
         let from_file = saved_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| Saved::from_text(&s));
         gpu.saved = match from_file {
@@ -163,18 +170,24 @@ impl MsiGpu {
         Ok(gpu)
     }
 
-    /// Shows one color (corrected for LEDs with [`Rgb::to_led`]). Does nothing
-    /// if the card already shows it.
+    /// Shows one color (corrected for LEDs with [`Rgb::to_led`]). Sends only
+    /// the parts that changed, and nothing if it's sooner than
+    /// [`MIN_UPDATE_GAP`] after the last change (call it every frame: the
+    /// latest color goes out once the gap has passed).
     pub fn set_color(&mut self, color: Rgb) -> std::io::Result<()> {
-        if self.last == Some(color) {
+        let c = color.to_led();
+        if self.shown == Some(c) || self.last_write.is_some_and(|t| t.elapsed() < MIN_UPDATE_GAP) {
             return Ok(());
         }
-        let c = color.to_led();
+        let old = self.shown;
         self.write(REG_PREPARE, 0)?;
-        self.write(REG_R, c.r)?;
-        self.write(REG_G, c.g)?;
-        self.write(REG_B, c.b)?;
-        self.last = Some(color);
+        for (reg, now, was) in [(REG_R, c.r, old.map(|o| o.r)), (REG_G, c.g, old.map(|o| o.g)), (REG_B, c.b, old.map(|o| o.b))] {
+            if was != Some(now) {
+                self.write(reg, now)?;
+            }
+        }
+        self.shown = Some(c);
+        self.last_write = Some(std::time::Instant::now());
         Ok(())
     }
 

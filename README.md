@@ -14,6 +14,15 @@ saves your setup into the devices' own memory, and then shrinks to a
 > Prism is an independent project. It is not made, endorsed or supported by
 > Corsair, MSI or ASUS. Corsair and iCUE are trademarks of Corsair Gaming, Inc.
 
+> **Built with AI.** Prism's code was written by an AI coding assistant
+> (Claude, by Anthropic), directed and tested on real hardware by its human
+> maintainer, HoneyBadger. Commits made this way are marked
+> `Co-Authored-By: Claude`. Everything marked *Tested* below was checked on
+> real devices, and the code has automated tests. But no human has reviewed
+> every line the way they would code they wrote themselves. Prism talks to
+> your hardware directly and can write to your devices' memory, so read the
+> code, or decide it's not for you, before you rely on it.
+
 ---
 
 ## What it does

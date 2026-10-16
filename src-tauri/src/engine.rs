@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
-use prism_core::effects::{render_layers, Layer, LightingStore, Profile, Surface};
+use prism_core::effects::{onboard_lights, render_layers, Layer, LightingStore, OnboardLight, Profile, Surface};
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
@@ -347,8 +347,10 @@ impl Engine {
                         let _ = done.send(r);
                     }
                     Ok(Msg::MouseSave(folder, lighting, dir, name, done)) => {
-                        // A still picture of the zones as they look right now.
-                        let picture: Vec<(&str, Rgb)> = nightsword::ZONES.iter().map(|z| z.0).zip(zones.iter().copied()).collect();
+                        // Each zone's light: the mouse's own effect where it
+                        // has one, otherwise its color right now.
+                        let lights = onboard_lights(&cfg.active_profile().unwrap_or(&empty).mouse, &devices.mouse, cfg.brightness, t);
+                        let picture: Vec<(&str, OnboardLight)> = nightsword::ZONES.iter().map(|z| z.0).zip(lights).collect();
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match (&mouse.dev, api.as_ref()) {
                             (Some(m), Some(api)) => {
@@ -373,7 +375,11 @@ impl Engine {
                         let _ = done.send(r);
                     }
                     Ok(Msg::KbSave(root, lighting, dir, name, done)) => {
-                        let picture = k65_mini::slot_colors(&devices.keys, keys);
+                        let lights = onboard_lights(&cfg.active_profile().unwrap_or(&empty).keyboard, &devices.keyboard, cfg.brightness, t);
+                        let mut picture: Vec<(u8, OnboardLight)> =
+                            devices.keys.iter().zip(&lights).flat_map(|(k, l)| k.slots.iter().map(move |&s| (s, *l))).collect();
+                        picture.sort_by_key(|(s, _)| *s);
+                        picture.dedup_by_key(|(s, _)| *s);
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match &kb.dev {
                             Some(k) => {
@@ -388,7 +394,7 @@ impl Engine {
                                         .iter()
                                         .filter_map(|(f, _)| f.strip_suffix(".bin").and_then(|h| u16::from_str_radix(h, 16).ok()))
                                         .collect();
-                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, lighting.then_some(&picture), b.created)
+                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, lighting.then_some(picture.as_slice()), b.created)
                                 }
                             }
                             None => Err("The keyboard isn't connected".to_string()),

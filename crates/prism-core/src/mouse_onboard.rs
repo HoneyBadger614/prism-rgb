@@ -75,8 +75,9 @@ pub struct MousePlan {
 }
 
 /// Mouse buttons a button can act as, as numbers in PROFILE.MAP (after the
-/// keyboard keys in Corsair's list). Checked: Right click = 0xc9.
-const MOUSE_NUMBERS: &[(u16, u8)] = &[(crate::bindings::BTN_LEFT + 1, 0xc9)];
+/// keyboard keys in Corsair's list). All checked with iCUE: Left 0xc8,
+/// Right 0xc9, Middle 0xca, Back 0xcb, Forward 0xcc.
+const MOUSE_NUMBERS: &[(u16, u8)] = &[(0x110, 0xc8), (0x111, 0xc9), (0x112, 0xca), (0x113, 0xcb), (0x114, 0xcc)];
 
 /// Works out every file for a profile's mouse bindings. Everything the
 /// mouse can't hold is listed in `skipped`.
@@ -270,7 +271,10 @@ pub fn macro_files(profile_dat: &[u8]) -> Vec<String> {
 
 /* ---------- lighting ----------
  * lghtcnt.cnt: how many lighting entries (u32). Entry n is two files:
- *   lght_nn.d: 07 00 02 00 00, red, green, blue, ff, 00 00 00 00 (steady)
+ *   lght_nn.d, 13 bytes, as iCUE writes them:
+ *     steady:  07 00 02 00 00, red, green, blue, ff, 00 00 00 00
+ *     rainbow: 03 02 00, then zeros
+ *     pulse:   01 02 03 00 00, red, green, blue, ff, red, green, blue, ff
  *   lght_nn.k: a count (u32), then the zones it lights.
  * Zones (checked on the mouse): Logo 0, Scroll wheel 2, Front 3, Back 5.
  * Zone 1 is the DPI light, which always shows the DPI stage's color.
@@ -279,18 +283,37 @@ pub fn macro_files(profile_dat: &[u8]) -> Vec<String> {
 /// Prism's zone name -> the mouse's onboard zone number.
 pub const LIGHT_ZONES: [(&str, u8); 4] = [("Front", 3), ("Scroll wheel", 2), ("Logo", 0), ("Back", 5)];
 
-/// Lighting files for a still picture: (file name, contents), the count
-/// file last. `zones` are Prism's zone colors, already corrected for LEDs.
-pub fn lighting_files(zones: &[(&str, crate::Rgb)]) -> Vec<(String, Vec<u8>)> {
-    let mut out = Vec::new();
-    let mut n = 0u32;
+/// Lighting files: (file name, contents), the count file last. Zones with
+/// the same light share one entry. Colors are corrected for LEDs here.
+pub fn lighting_files(zones: &[(&str, crate::effects::OnboardLight)]) -> Vec<(String, Vec<u8>)> {
+    use crate::effects::OnboardLight;
+    let mut entries: Vec<(OnboardLight, Vec<u8>)> = Vec::new();
     for (name, number) in LIGHT_ZONES {
-        let Some((_, c)) = zones.iter().find(|(z, _)| *z == name) else { continue };
-        out.push((format!("lght_{n:02}.d"), vec![0x07, 0x00, 0x02, 0x00, 0x00, c.r, c.g, c.b, 0xff, 0, 0, 0, 0]));
-        out.push((format!("lght_{n:02}.k"), vec![0x01, 0x00, 0x00, 0x00, number]));
-        n += 1;
+        let Some(&(_, light)) = zones.iter().find(|(z, _)| *z == name) else { continue };
+        match entries.iter_mut().find(|(l, _)| *l == light) {
+            Some((_, z)) => z.push(number),
+            None => entries.push((light, vec![number])),
+        }
     }
-    out.push(("lghtcnt.cnt".into(), n.to_le_bytes().to_vec()));
+    let mut out = Vec::new();
+    for (n, (light, zones)) in entries.iter().enumerate() {
+        let d = match *light {
+            OnboardLight::Steady(c) => {
+                let c = c.to_led();
+                vec![0x07, 0x00, 0x02, 0x00, 0x00, c.r, c.g, c.b, 0xff, 0, 0, 0, 0]
+            }
+            OnboardLight::Rainbow(_) => vec![0x03, 0x02, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            OnboardLight::Pulse(_, a, b) => {
+                let (a, b) = (a.to_led(), b.to_led());
+                vec![0x01, 0x02, 0x03, 0x00, 0x00, a.r, a.g, a.b, 0xff, b.r, b.g, b.b, 0xff]
+            }
+        };
+        let mut k = (zones.len() as u32).to_le_bytes().to_vec();
+        k.extend(zones);
+        out.push((format!("lght_{n:02}.d"), d));
+        out.push((format!("lght_{n:02}.k"), k));
+    }
+    out.push(("lghtcnt.cnt".into(), (entries.len() as u32).to_le_bytes().to_vec()));
     out
 }
 
@@ -371,7 +394,7 @@ mod tests {
     fn skips_what_the_mouse_cant_hold() {
         let p = plan_map(&[
             bind(0x114, ActionDef::Combo { keys: vec![29, 0x110] }),
-            bind(0x113, ActionDef::Key { key: 0x112 }),
+            bind(0x113, ActionDef::Key { key: 0x2f0 }),
             bind(0x2f2, ActionDef::Macro { steps: vec![MacroStep::Down { key: 30 }], mode: PlayMode::Repeat }),
             bind(0x110, ActionDef::Key { key: 30 }),
             BindingDef { device: InputDevice::Keyboard, input: 30, action: ActionDef::Key { key: 31 } },
@@ -383,6 +406,18 @@ mod tests {
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn mouse_buttons_like_icue() {
+        // iCUE: Back = Middle, Forward = Back, DPI Up = Forward, DPI Down = Left.
+        let p = plan_map(&[
+            bind(0x113, ActionDef::Key { key: 0x112 }),
+            bind(0x114, ActionDef::Key { key: 0x113 }),
+            bind(0x2f0, ActionDef::Key { key: 0x114 }),
+            bind(0x2f1, ActionDef::Key { key: 0x110 }),
+        ]);
+        assert_eq!(p.map, hex("4100040003ca8004cb8005cc8006c880"));
     }
 
     #[test]
@@ -425,14 +460,25 @@ mod tests {
 
     #[test]
     fn lighting_like_icue() {
+        use crate::effects::OnboardLight::{self, *};
         use crate::Rgb;
         // iCUE: Logo green, Front blue, Scroll wheel red.
-        let f = lighting_files(&[("Front", Rgb::new(0, 0, 255)), ("Scroll wheel", Rgb::new(255, 0, 0)), ("Logo", Rgb::new(0, 255, 0))]);
+        let f = lighting_files(&[("Front", Steady(Rgb::new(0, 0, 255))), ("Scroll wheel", Steady(Rgb::new(255, 0, 0))), ("Logo", Steady(Rgb::new(0, 255, 0)))]);
         assert!(f.contains(&("lght_02.d".into(), hex("070002000000ff00ff00000000"))));
         assert!(f.contains(&("lght_02.k".into(), hex("0100000000"))));
         assert!(f.contains(&("lght_00.d".into(), hex("07000200000000ffff00000000"))));
         assert!(f.contains(&("lght_00.k".into(), hex("0100000003"))));
         assert_eq!(f.last().unwrap(), &("lghtcnt.cnt".to_string(), hex("03000000")));
+        // iCUE: rainbow on all four zones; pulse red/blue.
+        let all = |l: OnboardLight| ["Front", "Scroll wheel", "Logo", "Back"].map(|z| (z, l)).to_vec();
+        let f = lighting_files(&all(Rainbow(0)));
+        assert_eq!(f, vec![
+            ("lght_00.d".into(), hex("03020000000000000000000000")),
+            ("lght_00.k".into(), hex("0400000003020005")),
+            ("lghtcnt.cnt".into(), hex("01000000")),
+        ]);
+        let f = lighting_files(&all(Pulse(0, Rgb::new(255, 0, 0), Rgb::new(0, 0, 255))));
+        assert_eq!(f[0], ("lght_00.d".into(), hex("0102030000ff0000ff0000ffff")));
     }
 
     fn sample_profile_i() -> Vec<u8> {

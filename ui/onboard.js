@@ -188,8 +188,8 @@ const Onboard = (() => {
     track.append(el("span", "switch-thumb"));
     light.append(lightBox, track, el("span", "switch-text", "Also save lighting"));
     const lightHint = el("p", "hint", kind === "mouse"
-      ? "Saves the mouse's colors as they look right now, as a still picture (moving effects stop where they are). The DPI light keeps showing the DPI stage."
-      : "Saves every key's color as it looks right now, as a still picture (moving effects stop where they are).");
+      ? "Rainbow, Color cycle and Breathe keep moving, using the mouse's own effects (at its normal speed). Everything else is saved as it looks right now. The DPI light keeps showing the DPI stage."
+      : "Rainbow, Color cycle and Breathe keep moving, using the keyboard's own effects (at its normal speed). Everything else is saved as it looks right now, as a still picture.");
 
     const save = el("button", "btn", `Save to ${dev}`);
     const cancel = el("button", "mini", "Cancel");
@@ -204,7 +204,7 @@ const Onboard = (() => {
         const r = kind === "mouse" ? await invoke("mouse_save", { folder: target, lighting }) : await invoke("kb_save", { root: target, lighting });
         const parts = kind === "mouse"
           ? [count(r.buttons, "button binding"), ...(r.dpi ? ["DPI"] : []), ...(r.lighting ? ["lighting"] : [])]
-          : [count(r.keys, "key binding"), ...(r.layers != null ? [`lighting (${count(r.layers, "color")})`] : [])];
+          : [count(r.keys, "key binding"), ...(r.layers != null ? [`lighting (${count(r.layers, "layer")})`] : [])];
         const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
         box.replaceChildren(el("p", "restore-q", `Saved to “${r.profile}”: ${what}, and checked by reading it back. A backup (${r.backup}) was made first, so this can be undone.`));
         $("save-status").textContent = "";

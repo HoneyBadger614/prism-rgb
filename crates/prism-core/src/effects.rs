@@ -384,6 +384,43 @@ impl LightingStore {
     }
 }
 
+/// What one LED can show by itself when saved to a device's memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OnboardLight {
+    /// A steady color (a still picture of the LED).
+    Steady(Rgb),
+    /// The device's own rainbow, for the layer at this index.
+    Rainbow(usize),
+    /// The device's own pulse between two colors, for the layer at this index.
+    Pulse(usize, Rgb, Rgb),
+}
+
+/// For saving to a device: each LED gets the effect of the topmost layer
+/// over it if the device can play it itself (rainbow, color cycle,
+/// breathe), otherwise its color at `t` seconds.
+pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -> Vec<OnboardLight> {
+    let still: Vec<Rgb> = render_layers(layers, surface, master, t).concat();
+    let mut top: Vec<Option<usize>> = vec![None; surface.leds.len()];
+    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled) {
+        match &layer.target {
+            Target::All => top.iter_mut().for_each(|t| *t = Some(n)),
+            Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(|i| top[i] = Some(n)),
+        }
+    }
+    let master = master as f32 / 100.0;
+    top.iter()
+        .enumerate()
+        .map(|(i, t)| match t.map(|n| (n, &layers[n])) {
+            Some((n, l)) if matches!(l.effect, Effect::Rainbow | Effect::ColorCycle) => OnboardLight::Rainbow(n),
+            Some((n, l)) if l.effect == Effect::Breathe => {
+                let level = l.brightness as f32 / 100.0 * master;
+                OnboardLight::Pulse(n, l.color1.scale(level), l.color2.scale(level))
+            }
+            _ => OnboardLight::Steady(still[i]),
+        })
+        .collect()
+}
+
 /// Every LED's color at `t` seconds, one list per channel of `surface`.
 /// `master` is the overall brightness, 0–100.
 pub fn render_layers(layers: &[Layer], surface: &Surface, master: u8, t: f64) -> Vec<Vec<Rgb>> {
@@ -641,6 +678,17 @@ mod tests {
         let along = render_layers(&[fx(Effect::Gradient, Spread::PerFan)], &s, 100, 0.0);
         assert_eq!((along[0][0], along[0][1], along[1][0], along[1][2]), (PURPLE, HOT_PINK, PURPLE, HOT_PINK));
         assert_eq!(Surface::strips(&[5, 0]).channels, vec![5, 0]);
+    }
+
+    #[test]
+    fn onboard_lights_take_the_top_layer() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
+        let base = Layer { effect: Effect::Rainbow, ..Default::default() };
+        let pulse = Layer { effect: Effect::Breathe, target: Target::Leds { leds: vec![LedRef(0, 1)] }, ..Default::default() };
+        let fixed = Layer { effect: Effect::Static, color1: WHITE, target: Target::Leds { leds: vec![LedRef(0, 2)] }, ..Default::default() };
+        let l = onboard_lights(&[base, pulse, fixed], &kb, 100, 0.0);
+        assert_eq!(l, vec![OnboardLight::Rainbow(0), OnboardLight::Pulse(1, PURPLE, HOT_PINK), OnboardLight::Steady(WHITE)]);
+        assert_eq!(onboard_lights(&[], &kb, 100, 0.0)[0], OnboardLight::Steady(BLACK));
     }
 
     #[test]

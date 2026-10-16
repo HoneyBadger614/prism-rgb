@@ -37,6 +37,8 @@ const ACTION_HEAD: [u8; 8] = [0x6e, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
 const MACRO_HEAD: [u8; 16] = [0xac, 0x30, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const KIND_KEY: u8 = 0x61;
 const KIND_MACRO: u8 = 0x31;
+/// Media keys that don't repeat when held (iCUE's Play/Pause and Mute).
+const KIND_ONCE: u8 = 0x21;
 const BOUND: u8 = 0x3a;
 const UNBOUND: u8 = 0x3b;
 const PRESS: u8 = 0x01;
@@ -189,14 +191,20 @@ pub fn plan(bindings: &[BindingDef], keys: &[Key]) -> KbPlan {
             continue;
         }
         let why = match &b.action {
-            ActionDef::Key { key } => match usb_code(*key) {
-                Some(u) => {
+            ActionDef::Key { key } => match (usb_code(*key), media_code(*key)) {
+                (Some(u), _) => {
                     plan.actions.push((slot, action_file(&[u]), KIND_KEY));
                     plan.saved.push((k.label, Saved::Key(*key)));
                     done.push(slot);
                     continue;
                 }
-                None => "only normal keys can be saved to the keyboard for now (not media keys or mouse buttons)",
+                (None, Some((usage, repeats))) => {
+                    plan.actions.push((slot, media_file(usage, repeats), if repeats { KIND_KEY } else { KIND_ONCE }));
+                    plan.saved.push((k.label, Saved::Key(*key)));
+                    done.push(slot);
+                    continue;
+                }
+                _ => "this key can't be saved to the keyboard yet (mouse buttons, for example)",
             },
             ActionDef::Combo { keys: combo } => match combo.iter().map(|c| usb_code(*c)).collect::<Option<Vec<u8>>>() {
                 Some(u) if !u.is_empty() => {
@@ -232,6 +240,29 @@ pub fn plan(bindings: &[BindingDef], keys: &[Key]) -> KbPlan {
         plan.skipped.push((k.label, why));
     }
     plan
+}
+
+/// Linux media key -> (USB media code, whether it repeats when held), as
+/// iCUE saves them (Play/Pause, Mute and Volume Up checked).
+pub fn media_code(code: u16) -> Option<(u16, bool)> {
+    Some(match code {
+        115 => (0xe9, true),  // volume up
+        114 => (0xea, true),  // volume down
+        113 => (0xe2, false), // mute
+        164 => (0xcd, false), // play/pause
+        163 => (0xb5, false), // next
+        165 => (0xb6, false), // previous
+        166 => (0xb7, false), // stop
+        _ => return None,
+    })
+}
+
+/// A media key action: `6e 07 03`, then 00 if it repeats when held (else
+/// 01), four zeros, and the USB media code (u16).
+pub fn media_file(usage: u16, repeats: bool) -> Vec<u8> {
+    let mut f = vec![0x6e, 0x07, 0x03, if repeats { 0x00 } else { 0x01 }, 0, 0, 0, 0];
+    f.extend_from_slice(&usage.to_le_bytes());
+    f
 }
 
 /// A key or combo action: one USB code, or several held together.
@@ -383,10 +414,58 @@ pub fn layer_file(color: crate::Rgb, slots: &[u8]) -> Vec<u8> {
     f
 }
 
+/// The keyboard's own rainbow wave on `slots` (default speed).
+pub fn rainbow_layer(slots: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x4c, 0xb9, 0x00, 0x04, 0x04, 0x00, 0x00];
+    f.push(slots.len() as u8);
+    f.extend_from_slice(slots);
+    f
+}
+
+/// The keyboard's own pulse between two colors (already corrected for
+/// LEDs) on `slots` (default speed).
+pub fn pulse_layer(a: crate::Rgb, b: crate::Rgb, slots: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x4f, 0xad, 0x01, 0x04, 0x00, 0x00, 0x02];
+    for c in [a, b] {
+        f.extend_from_slice(&[0xff, c.b, c.g, c.r]);
+    }
+    f.push(slots.len() as u8);
+    f.extend_from_slice(slots);
+    f
+}
+
+/// Layer files for each slot's light, top first: the device's own effects,
+/// then steady colors. Colors are corrected for LEDs here.
+pub fn light_layers(slots: &[(u8, crate::effects::OnboardLight)]) -> Vec<Vec<u8>> {
+    use crate::effects::OnboardLight;
+    let mut effects: Vec<(OnboardLight, Vec<u8>)> = Vec::new();
+    let mut steady = Vec::new();
+    for &(slot, light) in slots {
+        match light {
+            OnboardLight::Steady(c) => steady.push((slot, c.to_led())),
+            _ => match effects.iter_mut().find(|(l, _)| *l == light) {
+                Some((_, s)) => s.push(slot),
+                None => effects.push((light, vec![slot])),
+            },
+        }
+    }
+    effects.truncate(MAX_LAYERS / 2);
+    let mut out: Vec<Vec<u8>> = effects
+        .iter()
+        .map(|(l, s)| match *l {
+            OnboardLight::Pulse(_, a, b) => pulse_layer(a.to_led(), b.to_led(), s),
+            _ => rainbow_layer(s),
+        })
+        .collect();
+    let room = MAX_LAYERS - out.len();
+    out.extend(color_groups(&steady, room).into_iter().map(|(c, s)| layer_file(c, &s)));
+    out
+}
+
 /// Groups slots by color for a still picture: one (color, slots) per
 /// layer, most keys first. Unlit slots get no layer. Colors that are
-/// nearly the same are merged until there are at most [`MAX_LAYERS`].
-pub fn color_groups(slots: &[(u8, crate::Rgb)]) -> Vec<(crate::Rgb, Vec<u8>)> {
+/// nearly the same are merged until there are at most `max`.
+pub fn color_groups(slots: &[(u8, crate::Rgb)], max: usize) -> Vec<(crate::Rgb, Vec<u8>)> {
     let lit: Vec<(u8, crate::Rgb)> = slots.iter().copied().filter(|(_, c)| (c.r, c.g, c.b) != (0, 0, 0)).collect();
     for shift in 0..8 {
         let mut groups: Vec<((u8, u8, u8), Vec<(u8, crate::Rgb)>)> = Vec::new();
@@ -397,7 +476,7 @@ pub fn color_groups(slots: &[(u8, crate::Rgb)]) -> Vec<(crate::Rgb, Vec<u8>)> {
                 None => groups.push((k, vec![(slot, c)])),
             }
         }
-        if groups.len() <= MAX_LAYERS || shift == 7 {
+        if groups.len() <= max || shift == 7 {
             let mut out: Vec<(crate::Rgb, Vec<u8>)> = groups
                 .into_iter()
                 .map(|(_, members)| {
@@ -408,7 +487,7 @@ pub fn color_groups(slots: &[(u8, crate::Rgb)]) -> Vec<(crate::Rgb, Vec<u8>)> {
                 })
                 .collect();
             out.sort_by_key(|(_, s)| std::cmp::Reverse(s.len()));
-            out.truncate(MAX_LAYERS);
+            out.truncate(max);
             return out;
         }
     }
@@ -485,14 +564,33 @@ mod tests {
     }
 
     #[test]
+    fn media_and_effects_match_icue() {
+        let keys = crate::k65_mini::keys();
+        // iCUE: Caps = Play/Pause, Right Ctrl = Volume Up, Right Alt = Mute.
+        let p = plan(&[bind(58, ActionDef::Key { key: 164 }), bind(97, ActionDef::Key { key: 115 }), bind(100, ActionDef::Key { key: 113 })], &keys);
+        assert_eq!(p.actions[0], (57, hex("6e07030100000000cd00"), 0x21));
+        assert_eq!(p.actions[1], (109, hex("6e07030000000000e900"), 0x61));
+        assert_eq!(p.actions[2], (111, hex("6e07030100000000e200"), 0x21));
+        let all: Vec<u8> = hex("291e1f20212223242526272d2b141a0815171c180c12132f39041607090a0b0d0e0f33346a1d1b0619051110363738696c6b2c6f653031282e2a6e6d7a0001");
+        let mut wave = hex("4cb90004040000");
+        wave.push(all.len() as u8);
+        wave.extend(&all);
+        assert_eq!(rainbow_layer(&all), wave);
+        let mut pulse = hex("4fad0104000002ff0000ffffff0000");
+        pulse.push(all.len() as u8);
+        pulse.extend(&all);
+        assert_eq!(pulse_layer(crate::Rgb::new(255, 0, 0), crate::Rgb::new(0, 0, 255), &all), pulse);
+    }
+
+    #[test]
     fn groups_colors_into_layers() {
         use crate::Rgb;
         let red = Rgb::new(255, 0, 0);
-        let g = color_groups(&[(1, red), (2, Rgb::new(0, 0, 255)), (3, red), (4, Rgb::new(0, 0, 0))]);
+        let g = color_groups(&[(1, red), (2, Rgb::new(0, 0, 255)), (3, red), (4, Rgb::new(0, 0, 0))], MAX_LAYERS);
         assert_eq!(g, vec![(red, vec![1, 3]), (Rgb::new(0, 0, 255), vec![2])]);
         // A smooth fade over 100 keys is merged into at most MAX_LAYERS.
         let fade: Vec<(u8, Rgb)> = (0..100).map(|i| (i as u8, Rgb::new(i as u8 * 2 + 50, 0, 200))).collect();
-        let g = color_groups(&fade);
+        let g = color_groups(&fade, MAX_LAYERS);
         assert!(g.len() <= MAX_LAYERS && g.len() > 4, "{}", g.len());
         assert_eq!(g.iter().map(|x| x.1.len()).sum::<usize>(), 100);
     }

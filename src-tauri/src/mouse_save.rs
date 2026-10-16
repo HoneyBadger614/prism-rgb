@@ -79,8 +79,8 @@ pub fn plan(m: &Nightsword, api: &HidApi, profile: &Profile, key_name: impl Fn(u
 
 /// Writes `profile` into onboard folder `folder`, then reads it back to
 /// check. Call only after a backup.
-/// `lighting`, if given, is a still picture of the zones: (zone name, color).
-pub fn save(m: &Nightsword, api: &HidApi, profile: &Profile, folder: u8, lighting: Option<&[(&str, prism_core::Rgb)]>, backup: String) -> Result<SaveReport, String> {
+/// `lighting`, if given, is each zone's light: (zone name, light).
+pub fn save(m: &Nightsword, api: &HidApi, profile: &Profile, folder: u8, lighting: Option<&[(&str, prism_core::effects::OnboardLight)]>, backup: String) -> Result<SaveReport, String> {
     if !FOLDERS.contains(&folder) {
         return Err("That isn't one of the mouse's profiles".into());
     }
@@ -106,9 +106,8 @@ pub fn save(m: &Nightsword, api: &HidApi, profile: &Profile, folder: u8, lightin
         write_checked(m, api, folder, "PROFILE.I", f)?;
     }
     if let Some(zones) = lighting {
-        let led: Vec<(&str, prism_core::Rgb)> = zones.iter().map(|(z, c)| (*z, c.to_led())).collect();
         // The count file comes last, so the entries are all there first.
-        for (file, data) in mouse_onboard::lighting_files(&led) {
+        for (file, data) in mouse_onboard::lighting_files(zones) {
             write_checked(m, api, folder, &file, &data)?;
         }
     }

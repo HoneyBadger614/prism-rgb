@@ -3,8 +3,8 @@
 //! always taken first.
 
 use prism_core::effects::Profile;
-use prism_core::k65_mini::{K65Mini, Key, SLOTS};
-use prism_core::Rgb;
+use prism_core::effects::OnboardLight;
+use prism_core::k65_mini::{K65Mini, Key};
 use prism_core::kb_onboard::{self, Saved};
 use serde::Serialize;
 
@@ -83,11 +83,11 @@ pub fn plan(kb: &K65Mini, keys: &[Key], profile: &Profile, key_name: impl Fn(u16
     })
 }
 
-/// Writes `profile`'s bindings (and, if given, a still picture of the
-/// lighting: one color per slot) into the onboard profile whose root file
-/// is `root`, reading every file back to check it. Call only after a
-/// backup; `existing` is every file number the backup found.
-pub fn save(kb: &K65Mini, keys: &[Key], profile: &Profile, root: u16, existing: &[u16], lighting: Option<&[Rgb; SLOTS]>, backup: String) -> Result<SaveReport, String> {
+/// Writes `profile`'s bindings (and, if given, the lighting: (slot, light)
+/// for every key) into the onboard profile whose root file is `root`,
+/// reading every file back to check it. Call only after a backup;
+/// `existing` is every file number the backup found.
+pub fn save(kb: &K65Mini, keys: &[Key], profile: &Profile, root: u16, existing: &[u16], lighting: Option<&[(u8, OnboardLight)]>, backup: String) -> Result<SaveReport, String> {
     let all = find_profiles(kb)?;
     let target = all.iter().find(|f| f.root == root).ok_or("That isn't one of the keyboard's profiles")?;
     let old_flags = kb.read_file(target.info.flags).map_err(|e| format!("Couldn't read the keyboard's key flags: {e}"))?;
@@ -132,16 +132,14 @@ pub fn save(kb: &K65Mini, keys: &[Key], profile: &Profile, root: u16, existing: 
         let _ = kb.delete_file(*id);
     }
 
-    // Lighting: one steady layer per color, then the list pointing to them.
+    // Lighting: the keyboard's own effects and steady colors as layers,
+    // then the list pointing to them.
     let mut layers = None;
-    if let Some(colors) = lighting {
-        let mut slots: Vec<(u8, Rgb)> = keys.iter().flat_map(|k| k.slots.iter().map(|&s| (s, colors[s as usize].to_led()))).collect();
-        slots.sort_by_key(|(s, _)| *s);
-        slots.dedup_by_key(|(s, _)| *s);
-        let groups = kb_onboard::color_groups(&slots);
+    if let Some(lights) = lighting {
+        let files = kb_onboard::light_layers(lights);
         let reuse: Vec<u16> = target.layers.iter().copied().filter(|id| !others.contains(id)).collect();
         let mut layer_ids = Vec::new();
-        for (i, (color, group)) in groups.iter().enumerate() {
+        for (i, file) in files.iter().enumerate() {
             let id = match reuse.get(i) {
                 Some(&id) => id,
                 None => {
@@ -152,7 +150,7 @@ pub fn save(kb: &K65Mini, keys: &[Key], profile: &Profile, root: u16, existing: 
                     next - 1
                 }
             };
-            write_checked(kb, id, &kb_onboard::layer_file(*color, group))?;
+            write_checked(kb, id, file)?;
             layer_ids.push(id);
         }
         write_checked(kb, target.info.layers, &kb_onboard::layer_list_file(&layer_ids))?;

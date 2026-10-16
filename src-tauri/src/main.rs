@@ -5,6 +5,7 @@ mod autostart;
 mod backup;
 mod engine;
 mod mouse_buttons;
+mod mouse_save;
 mod remap;
 mod tray;
 
@@ -235,6 +236,26 @@ fn backup_dir(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, 
     Ok(dir)
 }
 
+/// What "Save to mouse" would write for the active profile. Read-only.
+#[tauri::command]
+async fn mouse_save_plan(app: tauri::AppHandle) -> Result<mouse_save::SavePlan, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().engine.mouse_plan())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Saves the active profile's button keys and DPI into one of the mouse's
+/// onboard profiles, after a backup. Changes the mouse's memory.
+#[tauri::command]
+async fn mouse_save(app: tauri::AppHandle, folder: u8) -> Result<mouse_save::SaveReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = config_dir(&app)?;
+        app.state::<AppState>().engine.mouse_save(folder, &dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What restoring a backup would change on the devices. Read-only.
 #[tauri::command]
 async fn restore_plan(app: tauri::AppHandle, name: String) -> Result<backup::Plan, String> {
@@ -376,6 +397,8 @@ fn main() {
             list_backups,
             restore_plan,
             restore_backup,
+            mouse_save_plan,
+            mouse_save,
             open_backups,
             ui_log
         ])

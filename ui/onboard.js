@@ -113,7 +113,87 @@ const Onboard = (() => {
     renderList();
   }
 
+  /* ---------- save to mouse ---------- */
+
+  async function checkMouse() {
+    const box = $("mouse-plan");
+    $("mouse-check").disabled = true;
+    $("mouse-status").textContent = "Reading the mouse's profiles…";
+    box.replaceChildren();
+    let plan;
+    try {
+      plan = await invoke("mouse_save_plan");
+    } catch (e) {
+      $("mouse-status").textContent = `Couldn't check: ${e}`;
+      $("mouse-check").disabled = false;
+      return;
+    }
+    $("mouse-status").textContent = "";
+    $("mouse-check").disabled = false;
+    if (!plan.profiles.length) {
+      box.append(el("p", "hint", "The mouse didn't list any profiles, so there's nowhere to save."));
+      return;
+    }
+
+    const name = Lighting.profile().name;
+    const lines = el("ul", "restore-lines");
+    if (plan.saved.length) plan.saved.forEach(([b, k]) => lines.append(el("li", null, `${b} → ${k}`)));
+    else lines.append(el("li", null, "No button keys (buttons will do what they normally do)"));
+    if (plan.dpi) {
+      const [sniper, [s1, s2, s3]] = plan.dpi;
+      lines.append(el("li", null, `DPI stages ${s1} / ${s2} / ${s3}, sniper ${sniper}`));
+    } else {
+      lines.append(el("li", null, "DPI: left as it is (DPI isn't turned on in this profile)"));
+    }
+    const skipped = el("ul", "restore-lines");
+    plan.skipped.forEach(([b, why]) => skipped.append(el("li", null, `${b}: ${why}`)));
+
+    const pick = el("div", "seg");
+    pick.style.gridTemplateColumns = `repeat(${Math.min(plan.profiles.length, 4)}, 1fr)`;
+    let folder = plan.profiles[0].folder;
+    plan.profiles.forEach((p) => {
+      const b = el("button", null, p.name);
+      b.title = `Holds now: DPI ${p.stages.join(" / ")}, sniper ${p.sniper}`;
+      b.setAttribute("aria-pressed", String(p.folder === folder));
+      b.addEventListener("click", () => {
+        folder = p.folder;
+        pick.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      });
+      pick.append(b);
+    });
+
+    const save = el("button", "btn", "Save to mouse");
+    const cancel = el("button", "mini", "Cancel");
+    cancel.addEventListener("click", () => box.replaceChildren());
+    save.addEventListener("click", async () => {
+      save.disabled = cancel.disabled = true;
+      pick.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      $("mouse-status").textContent = "Backing up the mouse, then saving…";
+      try {
+        const r = await invoke("mouse_save", { folder });
+        box.replaceChildren(el("p", "restore-q", `Saved to “${r.profile}”: ${count(r.buttons, "button key")}${r.dpi ? " and DPI" : ""}, and checked by reading it back. A backup (${r.backup}) was made first, so this can be undone.`));
+        $("mouse-status").textContent = "";
+      } catch (e) {
+        $("mouse-status").textContent = `Couldn't save: ${e}`;
+        save.disabled = cancel.disabled = false;
+      }
+      renderList();
+    });
+
+    box.append(
+      el("p", "restore-q", `From your Prism profile “${name}”, this will be saved:`),
+      lines,
+      ...(plan.skipped.length ? [el("p", "hint", "These need Prism running, so they won't be saved:"), skipped] : []),
+      el("p", "restore-q", "Into which of the mouse's profiles?"),
+      pick,
+      el("p", "hint", "This replaces that profile's button keys (and DPI, if shown above). Lighting there isn't changed."),
+      el("div", "onboard-actions"),
+    );
+    box.lastChild.append(save, cancel);
+  }
+
   function init() {
+    $("mouse-check").addEventListener("click", checkMouse);
     $("backup-now").addEventListener("click", backupNow);
     $("backup-open").addEventListener("click", () => invoke("open_backups").catch((e) => {
       $("backup-status").textContent = `Couldn't open the folder: ${e}`;

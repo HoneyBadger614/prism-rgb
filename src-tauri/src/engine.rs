@@ -43,6 +43,11 @@ enum Msg {
     /// Restore a backup folder onto the devices, after a fresh backup into
     /// the second folder.
     Restore(PathBuf, PathBuf, String, Sender<crate::backup::RestoreReport>),
+    /// What "Save to mouse" would write for the active profile (read-only).
+    MousePlan(Sender<Result<crate::mouse_save::SavePlan, String>>),
+    /// Back up into the folder, then save the active profile into the
+    /// mouse's onboard profile folder.
+    MouseSave(u8, PathBuf, String, Sender<Result<crate::mouse_save::SaveReport, String>>),
     Stop,
 }
 
@@ -326,6 +331,30 @@ impl Engine {
                         report.safety_backup = Some(safety.created);
                         let _ = done.send(report);
                     }
+                    Ok(Msg::MousePlan(done)) => {
+                        let profile = cfg.active_profile().unwrap_or(&empty);
+                        let r = match (&mouse.dev, api.as_ref()) {
+                            (Some(m), Some(api)) => Ok(crate::mouse_save::plan(m, api, profile, crate::key_name)),
+                            _ => Err("The mouse isn't connected".to_string()),
+                        };
+                        let _ = done.send(r);
+                    }
+                    Ok(Msg::MouseSave(folder, dir, name, done)) => {
+                        let profile = cfg.active_profile().unwrap_or(&empty).clone();
+                        let r = match (&mouse.dev, api.as_ref()) {
+                            (Some(m), Some(api)) => {
+                                let note = Some(format!("Made automatically before saving “{}” to the mouse", profile.name));
+                                let b = crate::backup::take(None, Some(m), Some(api), &dir, name, note);
+                                if !b.mouse.read || b.mouse.error.is_some() || b.mouse.files.is_empty() {
+                                    Err(format!("The backup didn't work ({}), so nothing was written", b.mouse.error.unwrap_or_else(|| "no files".into())))
+                                } else {
+                                    crate::mouse_save::save(m, api, &profile, folder, b.created)
+                                }
+                            }
+                            _ => Err("The mouse isn't connected".to_string()),
+                        };
+                        let _ = done.send(r);
+                    }
                     Ok(Msg::Flush(done)) => {
                         save(&save_to, &cfg);
                         unsaved_since = None;
@@ -421,6 +450,22 @@ impl Engine {
         let (tx, rx) = mpsc::channel();
         self.tx.send(Msg::Restore(dir, safety_dir, safety_name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
         rx.recv_timeout(Duration::from_secs(180)).map_err(|_| "The restore took too long".to_string())
+    }
+
+    /// What saving the active profile to the mouse would write (read-only).
+    pub fn mouse_plan(&self) -> Result<crate::mouse_save::SavePlan, String> {
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Msg::MousePlan(tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(60)).map_err(|_| "Reading the mouse took too long".to_string())?
+    }
+
+    /// Saves the active profile's button keys and DPI into the mouse's
+    /// onboard profile `folder`, after a fresh backup.
+    pub fn mouse_save(&self, folder: u8, config_dir: &std::path::Path) -> Result<crate::mouse_save::SaveReport, String> {
+        let (name, dir) = crate::backup::new_folder(config_dir, "_before-save").map_err(|e| e.to_string())?;
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Msg::MouseSave(folder, dir, name, tx)).map_err(|_| "Prism's device engine isn't running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(120)).map_err(|_| "Saving to the mouse took too long".to_string())?
     }
 
     /// Seconds since effects started.

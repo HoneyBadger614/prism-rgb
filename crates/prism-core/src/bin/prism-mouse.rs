@@ -14,6 +14,9 @@
 //!   prism-mouse rewrite 1 lghtcnt.cnt
 //!                            write one onboard file back with its OWN
 //!                            contents, then read it again and compare
+//!   prism-mouse write 0 PROFILE.MAP FILE
+//!                            replace one onboard file with FILE's bytes,
+//!                            then read it back (CHANGES THE MOUSE: back up first)
 //!   prism-mouse reset        just hand lighting back to the mouse
 //!
 //! When time is up the mouse goes back to its own lighting.
@@ -52,6 +55,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(dir.join(format!("{folder}_{name}")), &data)?;
             println!("  folder {folder} {name}: {} bytes", data.len());
         }
+        return Ok(());
+    }
+    if what == "write" {
+        let folder: u8 = args.next().and_then(|s| s.parse().ok()).ok_or("give a folder number, e.g. 0")?;
+        let name = args.next().ok_or("give a file name, e.g. PROFILE.MAP")?;
+        let data = std::fs::read(args.next().ok_or("give a file to write")?)?;
+        let mouse = Nightsword::open_with(&api, false)?;
+        mouse.write_named(&api, folder, &name, &data)?;
+        let after = mouse.read_file(&api, folder, &name)?;
+        println!("wrote {folder}/{name}: {}", if after == data { "read back IDENTICAL" } else { "read back DIFFERENT!" });
         return Ok(());
     }
     if what == "rewrite" {

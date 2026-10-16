@@ -164,9 +164,22 @@ const Bindings = (() => {
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.roundRect(ox - pad * 0.7, oy - pad * 0.7, u * 60 + pad * 1.4, u * 20 + pad * 1.4, 12); ctx.fill(); ctx.stroke();
 
+    // Neighbouring pieces of one key (the space bar has three lights) are
+    // drawn as one keycap.
+    const caps = [];
+    for (const k of Lighting.state().keys) {
+      const last = caps[caps.length - 1];
+      if (last && k.code && last.code === k.code && last.row === k.row && last.x + last.w === k.x) {
+        last.w += k.w;
+        last.label = last.label || k.label;
+      } else {
+        caps.push({ ...k });
+      }
+    }
+
     keySpots = [];
     const seen = new Set();
-    for (const k of Lighting.state().keys) {
+    for (const k of caps) {
       const x = ox + k.x * u + gap / 2, y = oy + k.row * 4 * u + gap / 2;
       const kw = k.w * u - gap, kh = 4 * u - gap;
       const bound = k.code ? find(k.code) : null;

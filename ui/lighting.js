@@ -607,7 +607,12 @@ const Lighting = (() => {
         const [xa, xb] = [Math.min(d.x0, d.x1), Math.max(d.x0, d.x1)];
         const [ya, yb] = [Math.min(d.y0, d.y1), Math.max(d.y0, d.y1)];
         if (!d.add) selection.clear();
-        for (const s of spots) if (s.x >= xa && s.x <= xb && s.y >= ya && s.y <= yb) selection.add(s.key);
+        // A zone with an area counts if the box touches it; an LED if the
+        // box covers its center.
+        const touches = (sp) => sp.rect
+          ? sp.rect[0] <= xb && sp.rect[0] + sp.rect[2] >= xa && sp.rect[1] <= yb && sp.rect[1] + sp.rect[3] >= ya
+          : sp.x >= xa && sp.x <= xb && sp.y >= ya && sp.y <= yb;
+        for (const sp of spots) if (touches(sp)) selection.add(sp.key);
       } else {
         const hit = hitTest(d.x0, d.y0);
         if (d.add) {
@@ -626,6 +631,22 @@ const Lighting = (() => {
   }
 
   /* ---------- preview ---------- */
+
+  // The dashed selection box while dragging, on any preview.
+  function drawDragBox(ctx) {
+    if (!drag || !drag.moved) return;
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+    ctx.save();
+    ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+    ctx.fillStyle = "rgba(255,45,149,0.12)";
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
+    ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+    ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+    ctx.restore();
+  }
 
   function drawFans() {
     const canvas = $("fans");
@@ -752,16 +773,7 @@ const Lighting = (() => {
       }
     }
 
-    if (drag && drag.moved) {
-      ctx.fillStyle = "rgba(255,45,149,0.12)";
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
-      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.setLineDash([]);
-    }
+    drawDragBox(ctx);
 
     const labels = $("fan-labels");
     labels.hidden = false;
@@ -838,16 +850,7 @@ const Lighting = (() => {
       ctx.beginPath(); ctx.roundRect(x - 2, y - 2, kw + 4, kh + 4, 6); ctx.stroke();
     }
 
-    if (drag && drag.moved) {
-      ctx.fillStyle = "rgba(255,45,149,0.12)";
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
-      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.setLineDash([]);
-    }
+    drawDragBox(ctx);
   }
 
   // The Nightsword from above, with its four zones glowing and labeled.
@@ -951,6 +954,7 @@ const Lighting = (() => {
       ctx.setLineDash([]);
       ctx.beginPath(); ctx.roundRect(m.rect[0] - 3, m.rect[1] - 3, m.rect[2] + 6, m.rect[3] + 6, 6); ctx.stroke();
     }
+    drawDragBox(ctx);
   }
 
   // The graphics card: one light bar along its edge, in the card's color.
@@ -1047,16 +1051,7 @@ const Lighting = (() => {
     ctx.lineWidth = 2;
     for (const [x, y, r] of marks) { ctx.beginPath(); ctx.arc(x, y, r + 4, 0, Math.PI * 2); ctx.stroke(); }
 
-    if (drag && drag.moved) {
-      ctx.fillStyle = "rgba(255,45,149,0.12)";
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
-      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
-      ctx.setLineDash([]);
-    }
+    drawDragBox(ctx);
   }
 
   function setupCanvas(canvas) {

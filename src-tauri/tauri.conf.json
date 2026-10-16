@@ -30,17 +30,11 @@
     "longDescription": "Prism controls Corsair keyboards, mice and lighting controllers on Linux: lighting effects across every device, key and button bindings, macros, DPI, and saving profiles to the devices' own memory. It also lights MSI graphics cards and ASUS Aura motherboards. AI-written; see the README.",
     "linux": {
       "deb": {
-        "depends": [
-          "libhidapi-hidraw0"
-        ],
         "files": {
           "/usr/lib/udev/rules.d/60-prism.rules": "../packaging/60-prism.rules"
         }
       },
       "rpm": {
-        "depends": [
-          "hidapi"
-        ],
         "files": {
           "/usr/lib/udev/rules.d/60-prism.rules": "../packaging/60-prism.rules"
         }

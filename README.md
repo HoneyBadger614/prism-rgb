@@ -196,7 +196,7 @@ has packages built on Ubuntu 22.04:
 - **`.rpm`** for Fedora and openSUSE:
   `sudo dnf install ./Prism-*.x86_64.rpm`
 - **AppImage** for anything else: make it executable and run it. You also
-  need `hidapi` installed, and the udev rule installed by hand (below).
+  need the udev rule installed by hand (below).
 
 The `.deb` and `.rpm` install the device permission rule for you; unplug
 and replug your devices afterwards. (Until the first release is published,
@@ -209,13 +209,13 @@ distribution.
 
 ```sh
 # Arch
-sudo pacman -S --needed base-devel rust webkit2gtk-4.1 hidapi libappindicator librsvg
+sudo pacman -S --needed base-devel rust webkit2gtk-4.1 libappindicator librsvg
 # Ubuntu / Debian / Mint / Pop!_OS (then install Rust from https://rustup.rs)
 sudo apt install build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-  libayatana-appindicator3-dev librsvg2-dev libhidapi-dev libudev-dev libxdo-dev
+  libayatana-appindicator3-dev librsvg2-dev libudev-dev libxdo-dev
 # Fedora (then install Rust from https://rustup.rs)
 sudo dnf install gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel \
-  libappindicator-gtk3-devel librsvg2-devel hidapi-devel systemd-devel libxdo-devel
+  libappindicator-gtk3-devel librsvg2-devel systemd-devel libxdo-devel
 ```
 
 Then build Prism and add it to your app menu:

@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-# Uses the system's hidapi (hidraw backend) instead of bundling a copy.
-hidapi = { version = "2.6", default-features = false, features = ["linux-shared-hidraw"] }
+# Builds its own copy of hidapi (hidraw backend) into Prism: distributions
+# ship versions too old for some calls Prism uses (Ubuntu 24.04 has 0.14).
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }
 serde = { version = "1", features = ["derive"] }
 # ioctl() for the graphics card's I2C bus.
 libc = "0.2"

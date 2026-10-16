@@ -91,21 +91,21 @@ say "Prism installer for ${PRETTY_NAME:-this system}"
 if [ "$deps" = yes ]; then
   case "$family" in
     arch)
-      pkgs="base-devel webkit2gtk-4.1 hidapi libappindicator librsvg openssl pkgconf curl"
+      pkgs="base-devel webkit2gtk-4.1 libappindicator librsvg openssl pkgconf curl"
       cmd="sudo pacman -S --needed $pkgs" ;;
     debian)
-      pkgs="build-essential curl wget file pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libhidapi-dev libudev-dev libxdo-dev"
+      pkgs="build-essential curl wget file pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev libxdo-dev"
       cmd="sudo apt-get install -y $pkgs" ;;
     fedora)
-      pkgs="gcc gcc-c++ make curl wget file pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel hidapi-devel systemd-devel libxdo-devel"
+      pkgs="gcc gcc-c++ make curl wget file pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel systemd-devel libxdo-devel"
       cmd="sudo dnf install -y $pkgs" ;;
     suse)
-      pkgs="gcc gcc-c++ make curl wget file pkg-config libopenssl-devel webkit2gtk3-devel libappindicator3-devel librsvg-devel libhidapi-devel systemd-devel"
+      pkgs="gcc gcc-c++ make curl wget file pkg-config libopenssl-devel webkit2gtk3-devel libappindicator3-devel librsvg-devel systemd-devel"
       cmd="sudo zypper install -y $pkgs" ;;
     *)
       note "I don't know this distribution's package names. Please install the"
       note "equivalents of: a C compiler, pkg-config, OpenSSL, WebKitGTK 4.1,"
-      note "libappindicator (or ayatana), librsvg and hidapi, then run:"
+      note "libappindicator (or ayatana), librsvg and libudev, then run:"
       note "  ./install.sh --no-deps"
       exit 1 ;;
   esac

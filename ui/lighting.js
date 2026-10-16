@@ -35,8 +35,8 @@ const Lighting = (() => {
   };
 
   let light = null;          // { store, layout (fans), keys (keyboard), zones (mouse) }
-  let frame = { node: [], keyboard: [], mouse: [] }; // latest colors sent to each device
-  let dev = "node";          // which device is showing: "node", "keyboard" or "mouse"
+  let frame = { node: [], keyboard: [], mouse: [], gpu: [], board: [] }; // latest colors sent to each device
+  let dev = "node";          // which device is showing: "node", "keyboard", "mouse", "gpu" or "board"
   let selection = new Set(); // "channel:index"
   let layerIndex = 0;        // layer being edited, in the active profile
   let activeSlot = "color1";
@@ -52,7 +52,16 @@ const Lighting = (() => {
 
   const profile = () => light.store.profiles[light.store.active];
   // The showing device's layers in the active profile.
-  const FIELD = { node: "layers", keyboard: "keyboard", mouse: "mouse" };
+  const FIELD = { node: "layers", keyboard: "keyboard", mouse: "mouse", gpu: "gpu", board: "motherboard" };
+
+  // Motherboard LEDs per channel: built-in lights, then each ARGB header.
+  function boardLens() {
+    const b = light.board;
+    if (!b) return [];
+    const set = light.store.argb_leds || [];
+    return [b.fixed, ...Array.from({ length: b.argb_headers }, (_, h) => set[h] ?? b.default_argb_leds)];
+  }
+  const headerName = (h) => `ARGB header ${h + 1}`;
   const stack = () => profile()[FIELD[dev]];
   const layer = () => stack()[layerIndex];
   const key = (c, i) => `${c}:${i}`;
@@ -61,6 +70,8 @@ const Lighting = (() => {
   function allLeds() {
     if (dev === "keyboard") return light.keys.map((_, i) => key(0, i));
     if (dev === "mouse") return light.zones.map((_, i) => key(0, i));
+    if (dev === "gpu") return [key(0, 0)];
+    if (dev === "board") return boardLens().flatMap((n, c) => Array.from({ length: n }, (_, i) => key(c, i)));
     const out = [];
     light.layout.forEach((ch, c) => {
       for (let i = 0; i < ch.fans * (ch.inner + ch.outer); i++) out.push(key(0 + c, i));
@@ -88,6 +99,12 @@ const Lighting = (() => {
   function groups() {
     if (dev === "keyboard") return keyGroups();
     if (dev === "mouse") return [["All", allLeds()], ...light.zones.map((name, i) => [name, [key(0, i)]])];
+    if (dev === "gpu") return [["All", allLeds()]];
+    if (dev === "board") {
+      const lens = boardLens();
+      const strip = (c) => Array.from({ length: lens[c] }, (_, i) => key(c, i));
+      return [["All", allLeds()], ["Board lights", strip(0)], ...lens.slice(1).map((_, h) => [headerName(h), strip(h + 1)])];
+    }
     const g = [["All", allLeds()], ["Hubs", []], ["Rings", []]];
     let fanNo = 0;
     light.layout.forEach((ch, c) => {
@@ -117,7 +134,7 @@ const Lighting = (() => {
     return `${leds.length} ${unit(leds.length)}`;
   }
 
-  const UNITS = { node: ["LED", "LEDs"], keyboard: ["key", "keys"], mouse: ["zone", "zones"] };
+  const UNITS = { node: ["LED", "LEDs"], keyboard: ["key", "keys"], mouse: ["zone", "zones"], gpu: ["light", "lights"], board: ["LED", "LEDs"] };
   const unit = (n) => UNITS[dev][n === 1 ? 0 : 1];
 
   function send() {
@@ -335,7 +352,8 @@ const Lighting = (() => {
     $("fx-sub").textContent = mode === "add"
       ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)}` : `all ${unit(2)}`}.`
       : `For the layer “${l.name}”. Its colors and LEDs stay the same.`;
-    $("fx-combos-wrap").hidden = mode !== "add";
+    const combos = { node: COMBOS, keyboard: KEY_COMBOS, mouse: MOUSE_COMBOS }[dev] || [];
+    $("fx-combos-wrap").hidden = mode !== "add" || !combos.length;
 
     $("fx-effects").replaceChildren(...Object.entries(EFFECTS).map(([k, e]) => {
       const card = el("button", "fx-card" + (mode === "change" && l.effect === k ? " current" : ""));
@@ -358,7 +376,6 @@ const Lighting = (() => {
       return card;
     }));
 
-    const combos = { node: COMBOS, keyboard: KEY_COMBOS, mouse: MOUSE_COMBOS }[dev];
     $("fx-combos").replaceChildren(...combos.map((c) => {
       const card = el("button", "fx-card");
       const t = el("span", "fx-thumb");
@@ -531,6 +548,8 @@ const Lighting = (() => {
     if (!light || canvas.offsetParent === null) return;
     if (dev === "keyboard") return drawKeyboard(canvas);
     if (dev === "mouse") return drawMouse(canvas);
+    if (dev === "gpu") return drawGpu(canvas);
+    if (dev === "board") return drawBoard(canvas);
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     canvas.width = Math.round(w * dpr);
@@ -813,6 +832,162 @@ const Lighting = (() => {
     }
   }
 
+  // The graphics card: one light bar along its edge, in the card's color.
+  function drawGpu(canvas) {
+    const { ctx, w, h } = setupCanvas(canvas);
+    const css = getComputedStyle(document.documentElement);
+    const raised = css.getPropertyValue("--raised").trim();
+    const surface = css.getPropertyValue("--surface").trim();
+    const edge = css.getPropertyValue("--line").trim();
+    const c = frame.gpu[0] || "#000000";
+
+    const cw = Math.min(w * 0.9, (h - 30) * 3.3), ch = cw / 3.3;
+    const x = (w - cw) / 2, y = (h - ch) / 2;
+    ctx.fillStyle = surface;
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(x, y, cw, ch, ch * 0.08); ctx.fill(); ctx.stroke();
+    // three fans
+    for (let f = 0; f < 3; f++) {
+      const cx = x + cw * (0.2 + f * 0.3), cy = y + ch * 0.55, r = ch * 0.34;
+      ctx.fillStyle = raised;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.lineWidth = r * 0.12;
+      for (let b = 0; b < 7; b++) {
+        const a = (b / 7) * Math.PI * 2;
+        ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r * 0.25, cy + Math.sin(a) * r * 0.25, r * 0.5, a - 0.2, a + 0.8); ctx.stroke();
+      }
+      ctx.lineWidth = 1.5;
+      ctx.fillStyle = surface;
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.22, 0, Math.PI * 2); ctx.fill();
+    }
+    // light bar along the top edge
+    const bar = [x + cw * 0.06, y + ch * 0.07, cw * 0.88, ch * 0.07];
+    ctx.shadowColor = c;
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = c;
+    ctx.beginPath(); ctx.roundRect(...bar, bar[3] / 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    spots = [{ key: key(0, 0), x: x + cw / 2, y: y + ch / 2, rect: [x, y, cw, ch] }];
+    if (selection.has(spots[0].key)) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x - 4, y - 4, cw + 8, ch + 8, ch * 0.1); ctx.stroke();
+    }
+  }
+
+  // The motherboard: a row for the built-in lights, then one per ARGB header.
+  function drawBoard(canvas) {
+    const { ctx, w, h } = setupCanvas(canvas);
+    const css = getComputedStyle(document.documentElement);
+    const muted = css.getPropertyValue("--muted").trim();
+    const edge = css.getPropertyValue("--line").trim();
+    const font = css.getPropertyValue("--font-mono").trim();
+    const accent = css.getPropertyValue("--accent").trim();
+    const lens = boardLens();
+    spots = [];
+    if (!lens.length) return;
+
+    const labelW = Math.min(150, w * 0.3);
+    const rowH = Math.min(70, h / lens.length);
+    const top = (h - rowH * lens.length) / 2;
+    const marks = [];
+    ctx.font = `12px ${font}`;
+    ctx.textBaseline = "middle";
+    lens.forEach((n, c) => {
+      const cy = top + rowH * (c + 0.5);
+      ctx.fillStyle = muted;
+      ctx.textAlign = "left";
+      ctx.fillText(c === 0 ? "Board lights" : headerName(c - 1), 0, cy);
+      if (!n) {
+        ctx.fillText("no LEDs set", labelW, cy);
+        return;
+      }
+      const room = w - labelW - 8;
+      const step = Math.min(34, room / n);
+      const r = Math.max(2.5, Math.min(11, step * 0.36));
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(labelW, cy); ctx.lineTo(labelW + step * n, cy); ctx.stroke();
+      for (let i = 0; i < n; i++) {
+        const cx = labelW + step * (i + 0.5);
+        const color = (frame.board[c] || [])[i] || "#000000";
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+        const s = { key: key(c, i), x: cx, y: cy, rect: [cx - step / 2, cy - rowH / 2, step, rowH] };
+        spots.push(s);
+        if (selection.has(s.key)) marks.push([cx, cy, r]);
+      }
+    });
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    for (const [x, y, r] of marks) { ctx.beginPath(); ctx.arc(x, y, r + 4, 0, Math.PI * 2); ctx.stroke(); }
+
+    if (drag && drag.moved) {
+      ctx.fillStyle = "rgba(255,45,149,0.12)";
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      const x = Math.min(drag.x0, drag.x1), y = Math.min(drag.y0, drag.y1);
+      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.setLineDash([]);
+    }
+  }
+
+  function setupCanvas(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    $("fan-labels").hidden = true;
+    return { ctx, w, h };
+  }
+
+  // How many LEDs are on each ARGB header. The board can't tell, so it's a
+  // setting; extra LEDs past the count are turned off.
+  function renderArgb() {
+    const bar = $("argb-bar");
+    const headers = dev === "board" && light.board ? light.board.argb_headers : 0;
+    bar.hidden = !headers;
+    if (!headers) return;
+    const lens = boardLens();
+    const max = light.board.max_argb_leds;
+    const setCount = (h, n) => {
+      const counts = boardLens().slice(1);
+      counts[h] = Math.max(0, Math.min(max, Math.round(Number(n) || 0)));
+      light.store.argb_leds = counts;
+      changed();
+    };
+    const rows = Array.from({ length: headers }, (_, h) => {
+      const row = el("div", "argb-row");
+      const step = el("div", "stepper");
+      const minus = el("button", null, "−");
+      const plus = el("button", null, "+");
+      const input = el("input");
+      input.type = "number";
+      input.min = "0";
+      input.max = String(max);
+      input.value = String(lens[h + 1]);
+      input.setAttribute("aria-label", `LEDs on ${headerName(h)}`);
+      minus.setAttribute("aria-label", "One fewer LED");
+      plus.setAttribute("aria-label", "One more LED");
+      minus.addEventListener("click", () => setCount(h, lens[h + 1] - 1));
+      plus.addEventListener("click", () => setCount(h, lens[h + 1] + 1));
+      input.addEventListener("change", () => setCount(h, input.value));
+      step.append(minus, input, plus);
+      row.append(el("span", "nm", `LEDs on ${headerName(h)}`), step);
+      return row;
+    });
+    bar.replaceChildren(...rows, el("p", "hint", "Not sure how many? Add a Static white layer, then raise the number until every LED on the device is lit."));
+  }
+
   // Short forms for when a key is too narrow for its full label.
   const SHORT_LABELS = { Backspace: "Bksp", Enter: "Ent", Shift: "Shft", Caps: "Cap", Menu: "Mnu", Ctrl: "Ctl", Space: "Spc" };
 
@@ -870,11 +1045,11 @@ const Lighting = (() => {
     $("target-all").textContent = describeTarget({ kind: "all" });
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.spread === l.spread)));
-    const SPREAD = { node: ["Across fans", "Per fan"], keyboard: ["Left to right", "Top to bottom"], mouse: ["Front to back", "Back to front"] };
+    const SPREAD = { node: ["Across fans", "Per fan"], keyboard: ["Left to right", "Top to bottom"], mouse: ["Front to back", "Back to front"], gpu: ["", ""], board: ["Across everything", "Along each strip"] };
     $("spread-across").textContent = SPREAD[dev][0];
     $("spread-per-fan").textContent = SPREAD[dev][1];
     $("field-colors").hidden = !fx.c1;
-    $("field-spread").hidden = !fx.spread;
+    $("field-spread").hidden = !fx.spread || dev === "gpu"; // one light: nothing to spread over
     $("field-speed").hidden = !fx.speed;
     $("slot-2").hidden = !fx.c2;
     $("slot-1-name").textContent = fx.c1 || "";
@@ -999,11 +1174,16 @@ const Lighting = (() => {
     if (!light) return;
     $("node-lighting").classList.toggle("keyboard", dev === "keyboard");
     $("node-lighting").classList.toggle("mouse", dev === "mouse");
+    $("node-lighting").classList.toggle("gpu", dev === "gpu");
+    $("node-lighting").classList.toggle("board", dev === "board");
+    renderArgb();
     $("select-label").textContent = `Select ${unit(2)}`;
     $("select-hint").textContent = {
       node: "Click LEDs in the preview, or drag a box around them. Hold Shift to add more.",
       keyboard: "Click keys on the keyboard, or drag a box around them. Hold Shift to add more.",
       mouse: "Click a zone on the mouse. Hold Shift to add more.",
+      gpu: "The whole card shows one color at a time, so effects play over time rather than across it.",
+      board: "Click LEDs, or drag a box around them. Hold Shift to add more.",
     }[dev];
     renderProfiles();
     $("master").value = light.store.brightness;
@@ -1044,6 +1224,8 @@ const Lighting = (() => {
         layers: [newLayer("gradient", { name: "Ember fade" })],
         keyboard: [newLayer("gradient", { name: "Ember fade" })],
         mouse: [newLayer("gradient", { name: "Ember fade" })],
+        gpu: [newLayer("gradient", { name: "Ember fade" })],
+        motherboard: [newLayer("gradient", { name: "Ember fade" })],
       });
     });
     $("profile-dup").addEventListener("click", () => {
@@ -1073,7 +1255,7 @@ const Lighting = (() => {
 
   async function init() {
     const state = await invoke("get_lighting");
-    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones, catalog: state.catalog, bindingsError: state.bindings_error, mouseButtons: state.mouse_buttons };
+    light = { store: state.store, layout: state.layout, keys: state.keys, zones: state.mouse_zones, catalog: state.catalog, bindingsError: state.bindings_error, mouseButtons: state.mouse_buttons, board: state.board };
     layerIndex = Math.max(0, stack().length - 1);
 
     $("quick-colors").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(n, hex, () => { hsv = null; editLayer({ [activeSlot]: hex }); })));

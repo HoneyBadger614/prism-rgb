@@ -12,10 +12,12 @@ const ICONS = {
   keyboard: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>',
   mouse: '<svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/></svg>',
   lighting: '<svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" rx="2"/><path d="M8 8V5M16 8V5M8 19v-3M16 19v-3"/></svg>',
+  gpu: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="11" rx="2"/><circle cx="8" cy="11.5" r="3"/><circle cx="16" cy="11.5" r="3"/><path d="M5 17v3M2 9H1"/></svg>',
+  motherboard: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="8" y="8" width="6" height="6" rx="1"/><path d="M17 7v10M7 17h7"/></svg>',
   unknown: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16h.01M10 9.5a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.8"/></svg>',
 };
 
-const KIND_LABEL = { keyboard: "Keyboard", mouse: "Mouse", lighting: "Lighting controller", unknown: "Corsair device" };
+const KIND_LABEL = { keyboard: "Keyboard", mouse: "Mouse", lighting: "Lighting controller", gpu: "Graphics card", motherboard: "Motherboard", unknown: "Corsair device" };
 
 // What each tab will do, shown until the feature is built.
 const SOON = {
@@ -144,14 +146,15 @@ function render() {
   if (!has) return;
   const d = devices[Math.min(selected, devices.length - 1)];
   $("dev-title").textContent = d.name;
-  $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · USB ${d.usb_id}`;
-  // Fans have no buttons or onboard memory, so the lighting controller only gets Lighting.
-  const onlyLighting = d.kind === "lighting";
+  $("dev-sub").textContent = `${KIND_LABEL[d.kind]} · ${d.bus}`;
+  // Fans, the graphics card and the motherboard have no buttons or onboard
+  // memory, so they only get Lighting.
+  const onlyLighting = ["lighting", "gpu", "motherboard"].includes(d.kind);
   if (onlyLighting) tab = "light";
   document.querySelector(".tabs").hidden = onlyLighting;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.t === tab)));
 
-  const nodeLighting = ["lighting", "keyboard", "mouse"].includes(d.kind) && tab === "light";
+  const nodeLighting = ["lighting", "keyboard", "mouse", "gpu", "motherboard"].includes(d.kind) && tab === "light";
   const keyBindings = ["keyboard", "mouse"].includes(d.kind) && tab === "keys";
   const onboard = ["keyboard", "mouse"].includes(d.kind) && tab === "mem";
   $("node-lighting").hidden = !nodeLighting;
@@ -164,7 +167,7 @@ function render() {
     return;
   }
   if (nodeLighting) {
-    Lighting.show({ lighting: "node", keyboard: "keyboard", mouse: "mouse" }[d.kind]);
+    Lighting.show({ lighting: "node", keyboard: "keyboard", mouse: "mouse", gpu: "gpu", motherboard: "board" }[d.kind]);
     return;
   }
   if (keyBindings) {

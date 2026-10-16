@@ -9,10 +9,12 @@ use std::collections::BTreeMap;
 use hidapi::HidApi;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub mod asus_aura;
 pub mod bindings;
 pub mod effects;
 pub mod k65_mini;
 pub mod lighting_node;
+pub mod msi_gpu;
 pub mod nightsword;
 
 /// A color, 0–255 per part.

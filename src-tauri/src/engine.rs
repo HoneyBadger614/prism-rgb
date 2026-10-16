@@ -1,6 +1,6 @@
 //! The lighting engine: a background thread that renders effects, sends them
-//! to the Lighting Node Pro and the K65 keyboard, and tells the screen what
-//! it sent.
+//! to the Corsair devices, the graphics card and the motherboard, and tells
+//! the screen what it sent.
 //!
 //! It keeps running when a device isn't connected (the preview still works)
 //! and looks for missing devices every couple of seconds, so unplugging and
@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
 use prism_core::effects::{render_layers, Layer, LightingStore, Profile, Surface};
+use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
+use prism_core::msi_gpu::{FoundGpu, MsiGpu};
 use prism_core::lighting_node::{LightingNode, CHANNELS, KEEPALIVE_INTERVAL};
 use prism_core::nightsword::{self, Nightsword};
 use prism_core::Rgb;
@@ -78,6 +80,9 @@ struct Frame<'a> {
     node: &'a [Vec<Rgb>],
     keyboard: &'a [Rgb],
     mouse: &'a [Rgb],
+    gpu: &'a [Rgb],
+    /// Built-in lights, then each ARGB header.
+    board: &'a [Vec<Rgb>],
 }
 
 /// The devices Prism drives, plus how they're laid out.
@@ -86,7 +91,23 @@ pub struct Devices {
     pub keyboard: Surface,
     pub keys: Vec<Key>,
     pub mouse: Surface,
+    /// A supported graphics card, if there is one.
+    pub gpu: Option<FoundGpu>,
+    /// The motherboard's lighting controller, already opened (to learn its
+    /// layout), if there is one.
+    pub aura: Option<AsusAura>,
 }
+
+/// The motherboard's LEDs: built-in lights, then each ARGB header with the
+/// number of LEDs set for it.
+pub fn board_surface(layout: &asus_aura::Layout, argb_leds: &[u16]) -> Surface {
+    let mut lens = vec![layout.fixed];
+    lens.extend((0..layout.argb_headers).map(|h| argb_leds.get(h).copied().unwrap_or(DEFAULT_ARGB_LEDS) as usize));
+    Surface::strips(&lens)
+}
+
+/// LEDs assumed on an ARGB header until the user sets the real number.
+pub const DEFAULT_ARGB_LEDS: u16 = 16;
 
 pub struct Engine {
     tx: Sender<Msg>,
@@ -135,6 +156,12 @@ impl Engine {
             let mut node: Link<LightingNode> = Link::new();
             let mut kb: Link<K65Mini> = Link::new();
             let mut mouse: Link<Nightsword> = Link::new();
+            let gpu_found = devices.gpu.clone();
+            let mut gpu: Link<MsiGpu> = Link::new();
+            let board_layout = devices.aura.as_ref().map(|a| a.layout);
+            let mut aura: Link<AsusAura> = Link { dev: devices.aura, last_try: None };
+            let one_led = Surface::grid(&[(0.0, 0.0)]);
+            let mut board_cache: Option<(Vec<u16>, Surface)> = None;
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
             // DPI: what's been sent to the mouse, the stage it's on, and
@@ -146,7 +173,7 @@ impl Engine {
             // control, so the first connection skips "take control".
             let mut resuming = resume_at > 0.0;
             let start = started;
-            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() };
+            let empty = Profile { name: String::new(), layers: vec![], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] };
 
             loop {
                 // Work out this frame first, so a device that (re)connects
@@ -159,6 +186,18 @@ impl Engine {
                 let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
                 let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
                 let zones: &[Rgb] = zones.first().map_or(&[], Vec::as_slice);
+                let gpu_color = render_layers(&profile.gpu, &one_led, cfg.brightness, t);
+                let gpu_color: &[Rgb] = gpu_color.first().map_or(&[], Vec::as_slice);
+                let board = match &board_layout {
+                    Some(layout) => {
+                        if board_cache.as_ref().map_or(true, |(n, _)| *n != cfg.argb_leds) {
+                            board_cache = Some((cfg.argb_leds.clone(), board_surface(layout, &cfg.argb_leds)));
+                        }
+                        let surface = &board_cache.as_ref().unwrap().1;
+                        render_layers(&profile.motherboard, surface, cfg.brightness, t)
+                    }
+                    None => vec![],
+                };
 
                 node.reconnect(&mut api, |api| {
                     let n = LightingNode::open(api).ok()?;
@@ -195,6 +234,25 @@ impl Engine {
                         mouse.dev = None;
                     }
                 }
+                if let Some(found) = &gpu_found {
+                    gpu.reconnect(&mut api, |_| MsiGpu::open(found).map_err(|e| eprintln!("graphics card: {e}")).ok());
+                }
+                if let (Some(g), Some(&c)) = (gpu.dev.as_mut(), gpu_color.first()) {
+                    if let Err(e) = g.set_color(c) {
+                        eprintln!("graphics card: {e}");
+                        gpu.dev = None;
+                    }
+                }
+
+                if board_layout.is_some() {
+                    aura.reconnect(&mut api, |api| AsusAura::open(api).ok());
+                }
+                if let (Some(a), Some((fixed, argb))) = (aura.dev.as_mut(), board.split_first()) {
+                    if a.set_colors(fixed, argb).is_err() {
+                        aura.dev = None;
+                    }
+                }
+
                 // The mouse's slower setup comes after its colors.
                 if !had_mouse && mouse.dev.is_some() {
                     dpi_applied = None; // a (re)connected mouse needs its DPI set again
@@ -228,7 +286,7 @@ impl Engine {
 
                 // Only bother the screen when there is one.
                 if !app.webview_windows().is_empty() {
-                    let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys, mouse: zones });
+                    let _ = app.emit("lighting-frame", Frame { node: &fans, keyboard: keys, mouse: zones, gpu: gpu_color, board: &board });
                 }
 
                 if unsaved_since.is_some_and(|t| t.elapsed() >= SAVE_AFTER) {
@@ -240,7 +298,9 @@ impl Engine {
                 if unsaved_since.is_some() {
                     wait = wait.min(SAVE_AFTER);
                 }
-                if node.dev.is_none() || kb.dev.is_none() || mouse.dev.is_none() {
+                let gpu_missing = gpu_found.is_some() && gpu.dev.is_none();
+                let board_missing = board_layout.is_some() && aura.dev.is_none();
+                if node.dev.is_none() || kb.dev.is_none() || mouse.dev.is_none() || gpu_missing || board_missing {
                     wait = wait.min(RECONNECT_EVERY);
                 }
 
@@ -309,6 +369,12 @@ impl Engine {
                         }
                         if let Some(m) = mouse.dev {
                             let _ = m.release();
+                        }
+                        // The card gets back the color it had before Prism.
+                        // The motherboard can't say what it had, so it keeps
+                        // Prism's last colors until its next restart.
+                        if let Some(g) = gpu.dev {
+                            let _ = g.release();
                         }
                         return;
                     }
@@ -406,7 +472,7 @@ pub fn load(path: &Option<PathBuf>, devices: &Devices) -> LightingStore {
     if let Ok(old) = serde_json::from_str::<Layer>(&text) {
         let layer = Layer { name: "Main".into(), ..old };
         let (keyboard, mouse) = (store.profiles[0].keyboard.clone(), store.profiles[0].mouse.clone());
-        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse, bindings: vec![], dpi: Default::default() });
+        store.profiles.insert(0, Profile { name: "My settings".into(), layers: vec![layer], keyboard, mouse, bindings: vec![], dpi: Default::default(), gpu: prism_core::effects::default_device_layers(), motherboard: prism_core::effects::default_device_layers() });
     }
     store.sanitized(&devices.fans, &devices.keyboard, &devices.mouse)
 }

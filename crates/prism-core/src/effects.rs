@@ -123,9 +123,16 @@ pub struct Profile {
     /// Mouse DPI.
     #[serde(default)]
     pub dpi: crate::bindings::DpiSettings,
+    /// Graphics card layers (one LED: the card shows one color).
+    #[serde(default = "default_device_layers")]
+    pub gpu: Vec<Layer>,
+    /// Motherboard layers: channel 0 is the built-in lights, then one
+    /// channel per ARGB header.
+    #[serde(default = "default_device_layers")]
+    pub motherboard: Vec<Layer>,
 }
 
-fn default_device_layers() -> Vec<Layer> {
+pub fn default_device_layers() -> Vec<Layer> {
     vec![Layer { name: "Ember fade".into(), ..Layer::default() }]
 }
 
@@ -140,6 +147,9 @@ pub struct LightingStore {
     /// Master switch for key and button bindings.
     #[serde(default = "yes")]
     pub bindings_on: bool,
+    /// How many LEDs are plugged into each motherboard ARGB header.
+    #[serde(default)]
+    pub argb_leds: Vec<u16>,
 }
 
 fn yes() -> bool {
@@ -259,6 +269,26 @@ impl Surface {
         Self { channels: vec![points.len()], leds, laps: [1.0, 1.0] }
     }
 
+    /// LEDs in rows, one channel per row (like a motherboard's built-in
+    /// lights and its ARGB headers). "Across" runs over every row in turn;
+    /// the second direction runs along each row on its own.
+    pub fn strips(lens: &[usize]) -> Self {
+        let total: usize = lens.iter().sum();
+        let mut leds = Vec::with_capacity(total);
+        let mut n = 0;
+        for &len in lens {
+            for i in 0..len {
+                let along = |k: usize, of: usize| if of > 1 { k as f64 / (of - 1) as f64 } else { 0.0 };
+                leds.push(LedGeom {
+                    lin: [along(n, total), along(i, len)],
+                    cyc: [n as f64 / total.max(1) as f64, i as f64 / len.max(1) as f64],
+                });
+                n += 1;
+            }
+        }
+        Self { channels: lens.to_vec(), leds, laps: [1.0, 1.0] }
+    }
+
     /// Position in `leds` of a (channel, index) reference, if it exists.
     pub fn index(&self, r: LedRef) -> Option<usize> {
         let (c, i) = (r.0 as usize, r.1 as usize);
@@ -302,14 +332,24 @@ impl LightingStore {
             mouse: default_device_layers(),
             bindings: vec![],
             dpi: Default::default(),
+            gpu: default_device_layers(),
+            motherboard: default_device_layers(),
         };
-        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true }
+        Self { active: 0, brightness: 100, profiles: vec![profile], bindings_on: true, argb_leds: vec![] }
     }
 
     /// Fixes anything out of range: numbers, names, too many profiles or
     /// layers, and LEDs that don't exist on the fans or keyboard.
     pub fn sanitized(mut self, fans: &Surface, keyboard: &Surface, mouse: &Surface) -> Self {
         self.brightness = self.brightness.min(100);
+        self.argb_leds.truncate(8);
+        for n in &mut self.argb_leds {
+            *n = (*n).min(crate::asus_aura::MAX_ARGB_LEDS as u16);
+        }
+        // Any LED a motherboard could have, so changing a header's LED count
+        // doesn't throw away selections.
+        let board = Surface::strips(&[crate::asus_aura::MAX_ARGB_LEDS; 9]);
+        let gpu = Surface::grid(&[(0.0, 0.0)]);
         self.profiles.truncate(MAX_PROFILES);
         if self.profiles.is_empty() {
             return Self::starter();
@@ -324,6 +364,8 @@ impl LightingStore {
                 mouse: sanitize_layers(p.mouse, mouse),
                 bindings: crate::bindings::sanitize(p.bindings),
                 dpi: p.dpi.sanitized(),
+                gpu: sanitize_layers(p.gpu, &gpu),
+                motherboard: sanitize_layers(p.motherboard, &board),
             })
             .collect();
         self.active = self.active.min(self.profiles.len() - 1);
@@ -337,7 +379,7 @@ impl LightingStore {
     /// Whether the active profile changes over time (and so needs constant updates).
     pub fn is_animated(&self) -> bool {
         self.active_profile().is_some_and(|p| {
-            p.layers.iter().chain(&p.keyboard).chain(&p.mouse).any(|l| l.enabled && l.effect.is_animated())
+            p.layers.iter().chain(&p.keyboard).chain(&p.mouse).chain(&p.gpu).chain(&p.motherboard).any(|l| l.enabled && l.effect.is_animated())
         })
     }
 }
@@ -426,7 +468,7 @@ mod tests {
     }
 
     fn one(layer: Layer) -> LightingStore {
-        LightingStore { active: 0, brightness: 100, bindings_on: true, profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }] }
+        LightingStore { active: 0, brightness: 100, bindings_on: true, argb_leds: vec![], profiles: vec![Profile { name: "T".into(), layers: vec![layer], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }] }
     }
 
     fn fx(effect: Effect, spread: Spread) -> Layer {
@@ -515,7 +557,8 @@ mod tests {
             active: 0,
             brightness: 100,
             bindings_on: true,
-            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }],
+            argb_leds: vec![],
+            profiles: vec![Profile { name: "Hub & Ring".into(), layers: vec![rings, hubs], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }],
         };
         let f = render(&hub_ring, &layout, 1.0);
         for fan in 0..3 {
@@ -555,7 +598,8 @@ mod tests {
             active: 99,
             brightness: 200,
             bindings_on: true,
-            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default() }],
+            argb_leds: vec![],
+            profiles: vec![Profile { name: "x".repeat(100), layers: vec![layer; MAX_LAYERS + 5], keyboard: vec![], mouse: vec![], bindings: vec![], dpi: Default::default(), gpu: vec![], motherboard: vec![] }],
         }
         .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert_eq!((s.active, s.brightness), (0, 100));
@@ -565,7 +609,7 @@ mod tests {
         assert_eq!((l.brightness, l.speed, l.name.as_str()), (100, 1, "Layer"));
         assert_eq!(l.target, Target::Leds { leds: vec![LedRef(0, 47)] });
 
-        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true }
+        let empty = LightingStore { active: 0, brightness: 100, profiles: vec![], bindings_on: true, argb_leds: vec![] }
             .sanitized(&Surface::fans(&layout), &Surface::grid(&[(0.0, 0.0)]), &Surface::grid(&[(0.0, 0.0)]));
         assert!(!empty.profiles.is_empty());
     }
@@ -587,6 +631,16 @@ mod tests {
         let s: LightingStore = serde_json::from_str(old).unwrap();
         assert_eq!(s.profiles[0].keyboard.len(), 1);
         assert_eq!(s.profiles[0].mouse.len(), 1);
+    }
+
+    #[test]
+    fn strips_run_across_rows_and_along_each() {
+        let s = Surface::strips(&[2, 3]);
+        let across = render_layers(&[fx(Effect::Gradient, Spread::Across)], &s, 100, 0.0);
+        assert_eq!((across[0][0], across[1][2]), (PURPLE, HOT_PINK));
+        let along = render_layers(&[fx(Effect::Gradient, Spread::PerFan)], &s, 100, 0.0);
+        assert_eq!((along[0][0], along[0][1], along[1][0], along[1][2]), (PURPLE, HOT_PINK, PURPLE, HOT_PINK));
+        assert_eq!(Surface::strips(&[5, 0]).channels, vec![5, 0]);
     }
 
     #[test]

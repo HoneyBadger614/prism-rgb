@@ -16,6 +16,8 @@ use remap::Remap;
 use hidapi::HidApi;
 use prism_core::effects::{ChannelLayout, LightingStore, Surface};
 use prism_core::k65_mini::{self, Key};
+use prism_core::asus_aura;
+use prism_core::msi_gpu;
 use prism_core::nightsword;
 use prism_core::{find_devices, DeviceKind, CORSAIR_VID};
 use serde::Serialize;
@@ -37,21 +39,25 @@ struct DeviceInfo {
     name: String,
     product: String,
     usb_id: String,
+    /// How it's connected, for the subtitle ("USB 1b1c:0c0b", "I2C bus 3").
+    bus: String,
     kind: &'static str,
     recognized: bool,
     interfaces: usize,
 }
 
-/// Lists connected Corsair devices. Read-only: no device is opened.
+/// Lists connected Corsair devices, then the graphics card and motherboard
+/// lighting found at startup. Read-only: no device is opened.
 #[tauri::command]
-fn list_devices() -> Result<Vec<DeviceInfo>, String> {
+fn list_devices(state: State<AppState>) -> Result<Vec<DeviceInfo>, String> {
     let api = HidApi::new().map_err(|e| format!("Could not start the USB device library: {e}"))?;
-    Ok(find_devices(&api)
+    let mut out: Vec<DeviceInfo> = find_devices(&api)
         .into_iter()
         .map(|d| DeviceInfo {
             name: d.display_name().to_string(),
             product: d.product.clone(),
             usb_id: format!("{:04x}:{:04x}", CORSAIR_VID, d.pid),
+            bus: format!("USB {:04x}:{:04x}", CORSAIR_VID, d.pid),
             kind: match d.model.map(|m| m.kind) {
                 Some(DeviceKind::Keyboard) => "keyboard",
                 Some(DeviceKind::Mouse) => "mouse",
@@ -61,7 +67,15 @@ fn list_devices() -> Result<Vec<DeviceInfo>, String> {
             recognized: d.is_supported(),
             interfaces: d.interfaces.len(),
         })
-        .collect())
+        .collect();
+    if let Some(g) = &state.gpu {
+        out.push(DeviceInfo { name: g.name.into(), product: g.name.into(), usb_id: String::new(), bus: format!("I2C bus {}", g.bus), kind: "gpu", recognized: true, interfaces: 1 });
+    }
+    if state.board.is_some() && asus_aura::present(&api) {
+        let name = "ASUS Aura motherboard";
+        out.push(DeviceInfo { name: name.into(), product: name.into(), usb_id: String::new(), bus: format!("USB {:04x}:{:04x}", asus_aura::ASUS_VID, asus_aura::SUPPORTED_PIDS[0]), kind: "motherboard", recognized: true, interfaces: 1 });
+    }
+    Ok(out)
 }
 
 pub(crate) struct AppState {
@@ -71,7 +85,20 @@ pub(crate) struct AppState {
     keyboard: Surface,
     keys: Vec<Key>,
     mouse: Surface,
+    gpu: Option<msi_gpu::FoundGpu>,
+    board: Option<asus_aura::Layout>,
     remap: Remap,
+}
+
+/// The motherboard's lights, for the screen.
+#[derive(Serialize)]
+struct BoardInfo {
+    /// Built-in lights (on the board and its 4-pin RGB sockets).
+    fixed: usize,
+    argb_headers: usize,
+    /// LEDs assumed on a header whose count hasn't been set.
+    default_argb_leds: u16,
+    max_argb_leds: usize,
 }
 
 #[derive(Serialize)]
@@ -89,6 +116,7 @@ struct LightingState {
     catalog: &'static [(&'static str, &'static [(u16, &'static str)])],
     /// Why bindings aren't working, if they aren't.
     bindings_error: Option<String>,
+    board: Option<BoardInfo>,
 }
 
 #[tauri::command]
@@ -101,6 +129,12 @@ fn get_lighting(state: State<AppState>) -> LightingState {
         catalog: bindings::CATALOG,
         mouse_buttons: &nightsword::BUTTONS,
         bindings_error: state.remap.error(),
+        board: state.board.map(|b| BoardInfo {
+            fixed: b.fixed,
+            argb_headers: b.argb_headers,
+            default_argb_leds: engine::DEFAULT_ARGB_LEDS,
+            max_argb_leds: asus_aura::MAX_ARGB_LEDS,
+        }),
     }
 }
 
@@ -303,18 +337,25 @@ fn main() {
             let save_to = app.path().app_config_dir().ok().map(|d| d.join("lighting.json"));
             let layout = node_layout();
             let keys = k65_mini::keys();
+            // The motherboard is opened now to learn what lights it has; the
+            // engine then keeps it.
+            let gpu = msi_gpu::find();
+            let aura = HidApi::new().ok().and_then(|api| asus_aura::AsusAura::open(&api).map_err(|e| eprintln!("motherboard: {e}")).ok());
+            let board = aura.as_ref().map(|a| a.layout);
             let devices = Devices {
                 fans: Surface::fans(&layout),
                 keyboard: k65_mini::surface(&keys),
                 keys: keys.clone(),
                 mouse: nightsword::surface(),
+                gpu: gpu.clone(),
+                aura,
             };
             let (fans, keyboard, mouse) = (devices.fans.clone(), devices.keyboard.clone(), devices.mouse.clone());
             let config = engine::load(&save_to, &devices);
             let remap = Remap::default();
             let engine = Engine::spawn(app.handle().clone(), config.clone(), devices, save_to, resume_at);
             remap.apply(&config, &engine);
-            app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, remap });
+            app.manage(AppState { engine, layout, fans, keyboard, keys, mouse, gpu, board, remap });
             tray::create(app.handle())?;
             if !hidden {
                 tray::show_window(app.handle());

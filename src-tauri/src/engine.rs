@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
-use prism_core::effects::{node_layout, onboard_lights, render_layers, Layer, LightingStore, OnboardLight, Profile, Surface};
+use prism_core::effects::{desk, node_layout, onboard_lights, render_layers_in, ripple_alive, Effect, Ripple, World, Layer, LightingStore, OnboardLight, Profile, Surface};
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
@@ -55,6 +55,9 @@ enum Msg {
     /// keyboard's onboard profile with this root file.
     /// (root file, also save lighting, ...)
     KbSave(u16, bool, PathBuf, String, Sender<Result<crate::kb_save::SaveReport, String>>),
+    /// A key or button went down: (device's USB product ID, key code). Only
+    /// used to start ripples; nothing is kept.
+    Press(u16, u16),
     Stop,
 }
 
@@ -163,6 +166,13 @@ impl Engine {
         let started = Instant::now().checked_sub(Duration::from_secs_f64(resume_at.clamp(0.0, 1e7))).unwrap_or_else(Instant::now);
         let (tx, rx) = mpsc::channel();
         let start_config = config.clone();
+        // Key presses reach the engine (for ripples) through this.
+        let press_tx = Mutex::new(tx.clone());
+        prism_input::set_press_hook(Some(std::sync::Arc::new(move |product, code| {
+            if let Ok(t) = press_tx.lock() {
+                let _ = t.send(Msg::Press(product, code));
+            }
+        })));
 
         let thread = std::thread::spawn(move || {
             let mut cfg = start_config;
@@ -177,6 +187,10 @@ impl Engine {
             let one_led = Surface::grid(&[(0.0, 0.0)]);
             let mut board_cache: Option<(Vec<u16>, Surface)> = None;
             let mut fans_cache: Option<(Option<Vec<Vec<String>>>, Surface)> = None;
+            // Typing ripples: the ones spreading now, and the watcher that
+            // hears presses while a ripple layer is on.
+            let mut ripples: Vec<Ripple> = Vec::new();
+            let mut watcher: Option<prism_input::PressWatcher> = None;
             let mut unsaved_since: Option<Instant> = None;
             let mut reporting: Vec<&'static str> = Vec::new();
             // DPI: what's been sent to the mouse, the stage it's on, and
@@ -196,15 +210,26 @@ impl Engine {
                 // blanks its lights until colors arrive.
                 let t = start.elapsed().as_secs_f64();
                 let profile = cfg.active_profile().unwrap_or(&empty);
+                ripples.retain(|r| ripple_alive(r, t));
+                let want_presses = [&profile.layers, &profile.keyboard, &profile.mouse, &profile.gpu, &profile.motherboard]
+                    .iter()
+                    .any(|ls| ls.iter().any(|l| l.enabled && l.effect == Effect::Ripple));
+                if want_presses != watcher.is_some() {
+                    watcher = want_presses.then(prism_input::PressWatcher::start);
+                    if !want_presses {
+                        ripples.clear();
+                    }
+                }
+                let on = |place| World { ripples: &ripples, place };
                 if fans_cache.as_ref().map_or(true, |(n, _)| *n != cfg.node_channels) {
                     fans_cache = Some((cfg.node_channels.clone(), Surface::fans(&node_layout(&cfg))));
                 }
-                let fans = render_layers(&profile.layers, &fans_cache.as_ref().unwrap().1, cfg.brightness, t);
-                let keys = render_layers(&profile.keyboard, &devices.keyboard, cfg.brightness, t);
+                let fans = render_layers_in(&profile.layers, &fans_cache.as_ref().unwrap().1, cfg.brightness, t, Some(&on(desk::FANS)));
+                let keys = render_layers_in(&profile.keyboard, &devices.keyboard, cfg.brightness, t, Some(&on(desk::KEYBOARD)));
                 let keys: &[Rgb] = keys.first().map_or(&[], Vec::as_slice);
-                let zones = render_layers(&profile.mouse, &devices.mouse, cfg.brightness, t);
+                let zones = render_layers_in(&profile.mouse, &devices.mouse, cfg.brightness, t, Some(&on(desk::MOUSE)));
                 let zones: &[Rgb] = zones.first().map_or(&[], Vec::as_slice);
-                let gpu_color = render_layers(&profile.gpu, &one_led, cfg.brightness, t);
+                let gpu_color = render_layers_in(&profile.gpu, &one_led, cfg.brightness, t, Some(&on(desk::GPU)));
                 let gpu_color: &[Rgb] = gpu_color.first().map_or(&[], Vec::as_slice);
                 let board = match &board_layout {
                     Some(layout) => {
@@ -212,7 +237,7 @@ impl Engine {
                             board_cache = Some((cfg.argb_leds.clone(), board_surface(layout, &cfg.argb_leds)));
                         }
                         let surface = &board_cache.as_ref().unwrap().1;
-                        render_layers(&profile.motherboard, surface, cfg.brightness, t)
+                        render_layers_in(&profile.motherboard, surface, cfg.brightness, t, Some(&on(desk::MOTHERBOARD)))
                     }
                     None => vec![],
                 };
@@ -312,7 +337,7 @@ impl Engine {
                     unsaved_since = None;
                 }
 
-                let mut wait = if cfg.is_animated() { FRAME_TIME } else { KEEPALIVE_INTERVAL };
+                let mut wait = if cfg.is_animated() || !ripples.is_empty() { FRAME_TIME } else { KEEPALIVE_INTERVAL };
                 if unsaved_since.is_some() {
                     wait = wait.min(SAVE_AFTER);
                 }
@@ -406,6 +431,27 @@ impl Engine {
                             None => Err("The keyboard isn't connected".to_string()),
                         };
                         let _ = done.send(r);
+                    }
+                    Ok(Msg::Press(product, code)) => {
+                        // Where on the desk the press was.
+                        let spot = match prism_core::lookup_model(product).map(|m| m.kind) {
+                            Some(prism_core::DeviceKind::Keyboard) => devices.keys.iter().position(|k| k.code == code).map(|i| {
+                                let g = devices.keyboard.leds[i].lin;
+                                let [x, y, w, h] = desk::KEYBOARD;
+                                (x + g[0] * w, y + g[1] * h)
+                            }),
+                            Some(prism_core::DeviceKind::Mouse) => {
+                                let [x, y, w, h] = desk::MOUSE;
+                                Some((x + w / 2.0, y + h * 0.2))
+                            }
+                            _ => None,
+                        };
+                        if let (Some((x, y)), true) = (spot, watcher.is_some()) {
+                            ripples.push(Ripple { t0: start.elapsed().as_secs_f64(), x, y });
+                            if ripples.len() > 48 {
+                                ripples.remove(0);
+                            }
+                        }
                     }
                     Ok(Msg::Flush(done)) => {
                         save(&save_to, &cfg);

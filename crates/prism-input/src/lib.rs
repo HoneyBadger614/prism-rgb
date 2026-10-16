@@ -380,7 +380,8 @@ impl Remapper {
             d.device.grab()?;
             grabbed.push(d.path.clone());
             let (stop, out, n) = (stop.clone(), out.clone(), notifier.clone());
-            threads.push(std::thread::spawn(move || pump(d.device, map, out, stop, n)));
+            let product = d.product;
+            threads.push(std::thread::spawn(move || pump(d.device, product, map, out, stop, n)));
         }
         Ok(Self { stop, threads, grabbed })
     }
@@ -407,6 +408,7 @@ impl Drop for Remapper {
 /// Reads one taken-over device and re-sends its events until told to stop.
 fn pump(
     mut dev: Device,
+    product: u16,
     bindings: HashMap<u16, Action>,
     out: Arc<Mutex<VirtualDevice>>,
     stop: Arc<AtomicBool>,
@@ -424,6 +426,9 @@ fn pump(
         for ev in events {
             match ev.event_type() {
                 EventType::KEY => {
+                    if ev.value() == PRESSED {
+                        pressed(product, ev.code());
+                    }
                     if let (Some(Action::Launch(app)), PRESSED) = (bindings.get(&ev.code()), ev.value()) {
                         launch(app);
                     }
@@ -447,6 +452,100 @@ fn pump(
     }
     macros.stop_all();
     let _ = dev.ungrab();
+}
+
+/* ---------- presses for lighting ---------- */
+
+/// Told (device's USB product ID, key code) for every key or button press
+/// on a Corsair device, for lighting that reacts to typing. Nothing is
+/// stored: it only learns where to start an effect.
+pub type PressHook = Arc<dyn Fn(u16, u16) + Send + Sync>;
+
+static PRESS_HOOK: Mutex<Option<PressHook>> = Mutex::new(None);
+
+/// Sets (or clears) who hears about presses.
+pub fn set_press_hook(hook: Option<PressHook>) {
+    if let Ok(mut h) = PRESS_HOOK.lock() {
+        *h = hook;
+    }
+}
+
+fn pressed(product: u16, code: u16) {
+    let hook = PRESS_HOOK.lock().ok().and_then(|h| h.clone());
+    if let Some(h) = hook {
+        h(product, code);
+    }
+}
+
+/// Watches the Corsair devices for presses without taking them over (so
+/// they keep working as normal) and passes them to the press hook. Devices
+/// the [`Remapper`] has taken over report their presses from there instead;
+/// a taken-over device sends this watcher nothing, so nothing is doubled.
+pub struct PressWatcher {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl PressWatcher {
+    pub fn start() -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut devices: Vec<(PathBuf, u16, Device)> = Vec::new();
+            let mut last_scan: Option<std::time::Instant> = None;
+            while !flag.load(Ordering::SeqCst) {
+                // Pick up devices plugged in later.
+                if last_scan.map_or(true, |t| t.elapsed() > std::time::Duration::from_secs(5)) {
+                    last_scan = Some(std::time::Instant::now());
+                    for d in corsair_devices().into_iter().filter(|d| d.has_keys()) {
+                        if !devices.iter().any(|(p, _, _)| *p == d.path) {
+                            devices.push((d.path, d.product, d.device));
+                        }
+                    }
+                }
+                let mut gone = Vec::new();
+                for (i, (_, product, dev)) in devices.iter_mut().enumerate() {
+                    if !readable(dev.as_raw_fd(), if i == 0 { 50 } else { 0 }) {
+                        continue;
+                    }
+                    match dev.fetch_events() {
+                        Ok(events) => {
+                            for ev in events {
+                                if ev.event_type() == EventType::KEY && ev.value() == PRESSED {
+                                    pressed(*product, ev.code());
+                                }
+                            }
+                        }
+                        Err(_) => gone.push(i), // unplugged
+                    }
+                }
+                for i in gone.into_iter().rev() {
+                    devices.remove(i);
+                }
+                if devices.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        });
+        Self { stop, thread: Some(thread) }
+    }
+
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for PressWatcher {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 /// Records key and button presses from the Corsair devices into macro steps,

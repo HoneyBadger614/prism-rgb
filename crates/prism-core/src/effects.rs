@@ -42,12 +42,17 @@ pub enum Effect {
     Comet,
     /// Flashing between color 1 and color 2.
     Strobe,
+    /// Rings of color 1 spreading from each key press, over color 2. The
+    /// rings travel across every device that has this effect.
+    Ripple,
 }
 
 impl Effect {
     /// Whether the colors change over time (and so need constant updates).
     pub fn is_animated(self) -> bool {
-        !matches!(self, Effect::Static | Effect::Gradient)
+        // A ripple only moves after a key press; the engine keeps drawing
+        // while one is spreading.
+        !matches!(self, Effect::Static | Effect::Gradient | Effect::Ripple)
     }
 }
 
@@ -530,17 +535,67 @@ pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -
             _ => OnboardLight::Steady(still[i]),
         })
         .collect()
+    // (A ripple layer saves as its background color: it can't react to
+    // typing without Prism.)
+}
+
+/// One key press spreading out: when (in effect seconds) and where, on the
+/// desk every device sits on (0-1 across, 0-1 front to back).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ripple {
+    pub t0: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Where a device sits on the desk ([x, y, width, height]) and the ripples
+/// spreading over it, for effects that cross devices.
+#[derive(Debug, Clone, Copy)]
+pub struct World<'a> {
+    pub ripples: &'a [Ripple],
+    pub place: [f64; 4],
+}
+
+/// Where each kind of device sits on the desk: the keyboard in front, the
+/// mouse to its right, the PC behind on the left.
+pub mod desk {
+    pub const KEYBOARD: [f64; 4] = [0.30, 0.62, 0.40, 0.16];
+    pub const MOUSE: [f64; 4] = [0.78, 0.62, 0.06, 0.16];
+    pub const FANS: [f64; 4] = [0.02, 0.05, 0.20, 0.22];
+    pub const MOTHERBOARD: [f64; 4] = [0.06, 0.30, 0.12, 0.12];
+    pub const GPU: [f64; 4] = [0.04, 0.45, 0.16, 0.05];
+}
+
+/// Rings this wide (in desk units) at their brightest.
+const RIPPLE_WIDTH: f64 = 0.05;
+/// A ripple fades out by the time it's this far from where it started.
+pub const RIPPLE_REACH: f64 = 1.4;
+
+/// How fast ripples spread for a layer `speed` of 1-10, in desk units per second.
+fn ripple_speed(speed: u8) -> f64 {
+    0.12 * speed as f64
+}
+
+/// Whether a ripple started at `t0` is still spreading at `t`, at the
+/// fastest speed.
+pub fn ripple_alive(r: &Ripple, t: f64) -> bool {
+    (t - r.t0) * ripple_speed(1) < RIPPLE_REACH
 }
 
 /// Every LED's color at `t` seconds, one list per channel of `surface`.
 /// `master` is the overall brightness, 0–100.
 pub fn render_layers(layers: &[Layer], surface: &Surface, master: u8, t: f64) -> Vec<Vec<Rgb>> {
+    render_layers_in(layers, surface, master, t, None)
+}
+
+/// Like [`render_layers`], with key-press ripples crossing the desk.
+pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64, world: Option<&World>) -> Vec<Vec<Rgb>> {
     let total = surface.leds.len();
     let mut flat = vec![BLACK; total];
 
     for layer in layers.iter().filter(|l| l.enabled) {
         let level = layer.brightness as f32 / 100.0;
-        let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface.laps, t).scale(level);
+        let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface.laps, t, world).scale(level);
         match &layer.target {
             Target::All => (0..total).for_each(&mut paint),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(&mut paint),
@@ -567,7 +622,7 @@ pub fn render(store: &LightingStore, layout: &[ChannelLayout], t: f64) -> Vec<Ve
     }
 }
 
-fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64) -> Rgb {
+fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, world: Option<&World>) -> Rgb {
     let d = match l.spread {
         Spread::Across => 0,
         Spread::PerFan => 1,
@@ -601,6 +656,24 @@ fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64) -> Rgb {
         }
         Effect::Strobe => {
             if (t * speed * 0.8).rem_euclid(1.0) < 0.25 { l.color1 } else { l.color2 }
+        }
+        Effect::Ripple => {
+            let Some(w) = world else { return l.color2 };
+            let [px, py, pw, ph] = w.place;
+            let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
+            let v = ripple_speed(l.speed);
+            let glow = w
+                .ripples
+                .iter()
+                .filter(|r| t >= r.t0)
+                .map(|r| {
+                    let radius = (t - r.t0) * v;
+                    let d = ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt();
+                    let ring = (1.0 - (d - radius).abs() / RIPPLE_WIDTH).max(0.0);
+                    ring * (1.0 - radius / RIPPLE_REACH).max(0.0)
+                })
+                .fold(0.0, f64::max);
+            l.color2.mix(l.color1, glow as f32)
         }
     }
 }
@@ -827,6 +900,25 @@ mod tests {
         let store = store.sanitized(&node_max_surface(), &k, &k);
         let chs = store.node_channels.unwrap();
         assert_eq!((chs.len(), chs[0].len(), chs[1].len()), (2, 22, 0));
+    }
+
+    #[test]
+    fn ripples_spread_and_fade() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0)]);
+        let layer = Layer { effect: Effect::Ripple, color1: WHITE, color2: BLACK, speed: 5, ..Default::default() };
+        // A press at the keyboard's left end: the left key lights first,
+        // the right one (0.4 desk units away) once the ring gets there.
+        let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62 }];
+        let w = World { ripples: &r, place: desk::KEYBOARD };
+        let at = |t: f64| render_layers_in(&[layer.clone()], &kb, 100, t, Some(&w))[0].clone();
+        assert!(at(0.0)[0].r > 200 && at(0.0)[1] == BLACK);
+        let reach = 0.4 / (0.12 * 5.0);
+        assert!(at(reach)[1].r > 100, "{:?}", at(reach));
+        assert_eq!(at(reach)[0], BLACK);
+        // Without ripples it's the background; it never counts as animated.
+        assert!(render_layers(&[layer.clone()], &kb, 100, 1.0)[0].iter().all(|&c| c == BLACK));
+        assert!(!Effect::Ripple.is_animated());
+        assert!(!ripple_alive(&r[0], 20.0));
     }
 
     #[test]

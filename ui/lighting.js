@@ -23,6 +23,7 @@ const Lighting = (() => {
     "color-cycle": { name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
     comet: { name: "Comet", desc: "A bright head with a fading tail", c1: "Head", c2: "Background", spread: true, speed: true, start: { color1: PINK, color2: "#140624", spread: "per-fan" } },
     strobe: { name: "Strobe", desc: "Fast flashing", c1: "Flash", c2: "Between", speed: true, start: { color1: WHITE, color2: "#000000", speed: 4 } },
+    ripple: { name: "Typing ripple", desc: "Rings spread from each key you press. Add it to each device you want them on", c1: "Ripple", c2: "Background", speed: true, start: { color1: PINK, color2: "#140624", speed: 5 } },
   };
 
   const ICON = {
@@ -416,6 +417,7 @@ const Lighting = (() => {
       case "rainbow": case "color-cycle": return "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)";
       case "comet": return `linear-gradient(90deg, ${c2} 0 45%, ${c1} 70%, ${c2} 72%)`;
       case "strobe": return c1;
+      case "ripple": return `radial-gradient(circle, ${c2} 0 18%, ${c1} 22% 30%, ${c2} 34% 48%, ${c1} 52% 58%, ${c2} 62%)`;
     }
     return c1;
   }
@@ -1158,6 +1160,7 @@ const Lighting = (() => {
     t.style.setProperty("--off", l.color2);
     $("effect-name").textContent = fx.name;
     $("effect-desc").textContent = fx.desc;
+    renderRippleNote(l);
 
     $("target-desc").textContent = target;
     $("target-all").disabled = l.target.kind === "all";
@@ -1285,6 +1288,24 @@ const Lighting = (() => {
     });
     input.addEventListener("blur", () => layer() && syncPicker());
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  }
+
+  // Ripples only show on devices that have their own ripple layer, so say
+  // which ones do.
+  const RIPPLE_DEVICES = [["layers", "Lighting controller (fans)"], ["keyboard", "Keyboard"], ["mouse", "Mouse"], ["gpu", "Graphics card"], ["motherboard", "Motherboard"]];
+  function renderRippleNote(l) {
+    const box = $("ripple-note");
+    box.hidden = l.effect !== "ripple";
+    if (box.hidden) return;
+    const p = profile();
+    const has = RIPPLE_DEVICES.filter(([f]) => (p[f] || []).some((x) => x.enabled && x.effect === "ripple")).map(([, n]) => n);
+    const missing = RIPPLE_DEVICES.filter(([, n]) => !has.includes(n)).map(([, n]) => n);
+    const list = (names) => names.join(", ");
+    box.replaceChildren(
+      el("p", null, "The rings only appear on devices that have their own Typing ripple layer. Prism doesn't add it to the others for you."),
+      el("p", null, `On: ${has.length ? list(has) : "none yet"}`),
+      ...(missing.length ? [el("p", null, `Not on yet: ${list(missing)}. To add it, pick that device on the left and add a Typing ripple layer there too.`)] : []),
+    );
   }
 
   /* ---------- wiring ---------- */

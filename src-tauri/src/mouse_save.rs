@@ -4,7 +4,7 @@
 
 use hidapi::HidApi;
 use prism_core::effects::Profile;
-use prism_core::mouse_onboard::{self, MousePlan};
+use prism_core::mouse_onboard::{self, MousePlan, Saved};
 use prism_core::nightsword::Nightsword;
 use serde::Serialize;
 
@@ -56,7 +56,18 @@ pub fn plan(m: &Nightsword, api: &HidApi, profile: &Profile, key_name: impl Fn(u
     let p = mouse_onboard::plan_map(&profile.bindings);
     SavePlan {
         profiles: profiles(m, api),
-        saved: p.saved.iter().map(|(b, k)| (b.to_string(), key_name(*k))).collect(),
+        saved: p
+            .saved
+            .iter()
+            .map(|(b, what)| {
+                let text = match what {
+                    Saved::Key(k) => key_name(*k),
+                    Saved::Combo(keys) => keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(" + "),
+                    Saved::Macro(n) => format!("a macro ({n} key press{})", if *n == 1 { "" } else { "es" }),
+                };
+                (b.to_string(), text)
+            })
+            .collect(),
         skipped: p.skipped.iter().map(|(b, why)| (b.to_string(), why.to_string())).collect(),
         dpi: profile.dpi.enabled.then(|| {
             let d = profile.dpi.clone().sanitized();
@@ -73,7 +84,7 @@ pub fn save(m: &Nightsword, api: &HidApi, profile: &Profile, folder: u8, backup:
     }
     let info = profile_i(m, api, folder)?;
     let name = mouse_onboard::profile_name(&info).unwrap_or_default();
-    let MousePlan { map, saved, .. } = mouse_onboard::plan_map(&profile.bindings);
+    let MousePlan { map, dat, macros, saved, .. } = mouse_onboard::plan_map(&profile.bindings);
 
     let new_info = if profile.dpi.enabled {
         Some(mouse_onboard::patch_dpi(&info, &profile.dpi).ok_or("The mouse's profile file isn't in the expected format, so nothing was written")?)
@@ -81,20 +92,13 @@ pub fn save(m: &Nightsword, api: &HidApi, profile: &Profile, folder: u8, backup:
         None
     };
 
-    // A macro iCUE left on a button would win over the new key.
-    let buttons = mouse_onboard::map_buttons(&map);
-    let new_dat = match m.read_file(api, folder, "PROFILE.DAT") {
-        Ok(dat) => match mouse_onboard::macro_buttons(&dat) {
-            Some(on) if on.iter().any(|b| buttons.contains(b)) => mouse_onboard::drop_macros(&dat, &buttons),
-            Some(_) => None,
-            None => return Err("The mouse's macro list isn't in the expected format, so nothing was written".into()),
-        },
-        Err(_) => None, // no macros in this profile
-    };
-
-    if let Some(dat) = &new_dat {
-        write_checked(m, api, folder, "PROFILE.DAT", dat)?;
+    // Macro files first, then the list that points to them, then the keys.
+    // This replaces the profile's whole button setup, including any macros
+    // iCUE left (a macro would win over a key on the same button).
+    for (file, data) in &macros {
+        write_checked(m, api, folder, file, data)?;
     }
+    write_checked(m, api, folder, "PROFILE.DAT", &dat)?;
     write_checked(m, api, folder, "PROFILE.MAP", &map)?;
     if let Some(f) = &new_info {
         write_checked(m, api, folder, "PROFILE.I", f)?;

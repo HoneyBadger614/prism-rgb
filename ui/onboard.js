@@ -183,7 +183,7 @@ const Onboard = (() => {
     box.append(
       el("p", "restore-q", `From your Prism profile “${name}”, this will be saved:`),
       lines,
-      ...(plan.skipped.length ? [el("p", "hint", "These need Prism running, so they won't be saved:"), skipped] : []),
+      ...(plan.skipped.length ? [el("p", "hint", "These won't be saved (they still work while Prism is running):"), skipped] : []),
       el("p", "restore-q", "Into which of the mouse's profiles?"),
       pick,
       el("p", "hint", "This replaces that profile's button keys (and DPI, if shown above). Lighting there isn't changed."),

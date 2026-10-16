@@ -429,10 +429,21 @@ impl Nightsword {
                 names.push(format!("lght_{i:02}.k"));
             }
             let mut any = false;
-            for name in names {
+            let mut i = 0;
+            while i < names.len() {
+                let name = names[i].clone();
+                i += 1;
                 match self.read_named(&answers, &name) {
                     Ok(data) if !data.is_empty() => {
                         any = true;
+                        // PROFILE.DAT names the macro files (M000, M001, ...).
+                        if name == "PROFILE.DAT" {
+                            for m in crate::mouse_onboard::macro_files(&data) {
+                                if !names.contains(&m) {
+                                    names.push(m);
+                                }
+                            }
+                        }
                         out.push((folder, name, data));
                     }
                     _ => {}

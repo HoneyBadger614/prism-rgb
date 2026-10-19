@@ -150,6 +150,26 @@ Why it's this small:
 
 ---
 
+## Testers wanted
+
+Prism has been tested on one computer, with the devices marked *Tested*
+below. To support more hardware and more distributions, it needs people
+to try it and say what happened. Any of these helps:
+
+- **You own an Experimental device:** open Prism, pick the device and
+  click **Help support this device**. It walks you through a short test,
+  shows you every piece of the report, and saves it as a file. Prism never
+  sends it anywhere: you drag the file into a new GitHub issue yourself.
+- **You own Corsair, MSI or ASUS RGB hardware Prism doesn't list:** click
+  **Report other RGB hardware** in the device list.
+- **It worked, or it didn't, on your distribution:** open an
+  [issue](https://github.com/HoneyBadger614/prism-rgb/issues) saying
+  which distribution and which install method. "Works on Fedora 42" is
+  useful too.
+- **Something broke:** open an issue with what you did and what happened.
+
+---
+
 ## Supported devices
 
 **Tested** means checked on real hardware. **Experimental** means Prism
@@ -222,8 +242,7 @@ has packages built on Ubuntu 22.04:
   need the udev rule installed by hand (below).
 
 The `.deb` and `.rpm` install the device permission rule for you; unplug
-and replug your devices afterwards. (Until the first release is published,
-use the installer.)
+and replug your devices afterwards.
 
 ### By hand
 

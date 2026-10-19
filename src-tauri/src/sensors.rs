@@ -62,12 +62,19 @@ impl SensorHub {
 /* ---------- temperatures ---------- */
 
 fn read_temps(stop: &AtomicBool, readings: &Mutex<Sensors>) {
-    // Ask nvidia-smi only if there's an NVIDIA card and no other reading.
+    // Ask nvidia-smi only if there's an NVIDIA card and no other reading,
+    // and only every few seconds: it takes about 15 ms each time.
     let mut nvidia = true;
-    while !stop.load(Ordering::Relaxed) {
+    let mut gpu = None;
+    for second in 0u64.. {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let cpu = cpu_temp();
-        let mut gpu = hwmon_temp(&["amdgpu", "radeon", "nouveau"], &["edge"]);
-        if gpu.is_none() && nvidia {
+        let card = hwmon_temp(&["amdgpu", "radeon", "nouveau"], &["edge"]);
+        if card.is_some() {
+            gpu = card;
+        } else if nvidia && second % 3 == 0 {
             gpu = nvidia_temp();
             nvidia = gpu.is_some();
         }
@@ -153,6 +160,10 @@ struct Bands {
     peak: [f32; BANDS],
     /// What's showing, falling back gently.
     shown: [f32; BANDS],
+    /// The Hann window, so a band doesn't leak into its neighbours.
+    window: Vec<f32>,
+    /// The FFT's turning factors (cos, sin), worked out once.
+    twiddles: Vec<(f32, f32)>,
 }
 
 impl Bands {
@@ -161,15 +172,16 @@ impl Bands {
         let hz = |i: usize| 40.0 * 400f32.powf(i as f32 / BANDS as f32);
         let bin = |f: f32| (f / (RATE / SIZE as f32)) as usize;
         let bins = (0..BANDS).map(|i| bin(hz(i)).max(1)..bin(hz(i + 1)).max(bin(hz(i)).max(1) + 1)).collect();
-        Self { bins, peak: [-35.0; BANDS], shown: [0.0; BANDS] }
+        let window = (0..SIZE).map(|i| (std::f32::consts::PI * i as f32 / SIZE as f32).sin().powi(2)).collect();
+        let twiddles = (0..SIZE / 2).map(|k| (-std::f32::consts::TAU * k as f32 / SIZE as f32).sin_cos()).map(|(s, c)| (c, s)).collect();
+        Self { bins, peak: [-35.0; BANDS], shown: [0.0; BANDS], window, twiddles }
     }
 
     fn update(&mut self, samples: &[f32]) -> [f32; BANDS] {
-        // Hann window, so a band doesn't leak into its neighbours.
         let n = samples.len();
-        let mut re: Vec<f32> = samples.iter().enumerate().map(|(i, s)| s * (std::f32::consts::PI * i as f32 / n as f32).sin().powi(2)).collect();
+        let mut re: Vec<f32> = samples.iter().zip(&self.window).map(|(s, w)| s * w).collect();
         let mut im = vec![0.0; n];
-        fft(&mut re, &mut im);
+        fft(&mut re, &mut im, &self.twiddles);
         // A full-scale sine comes out near 0 dB.
         let scale = (n as f32 / 4.0).powi(2);
         for (b, bins) in self.bins.iter().enumerate() {
@@ -185,8 +197,9 @@ impl Bands {
     }
 }
 
-/// In-place fast Fourier transform; the length must be a power of two.
-fn fft(re: &mut [f32], im: &mut [f32]) {
+/// In-place fast Fourier transform; the length must be a power of two, and
+/// `twiddles` the (cos, sin) of -2πk/length for k below half of it.
+fn fft(re: &mut [f32], im: &mut [f32], twiddles: &[(f32, f32)]) {
     let n = re.len();
     let mut j = 0;
     for i in 1..n {
@@ -203,10 +216,10 @@ fn fft(re: &mut [f32], im: &mut [f32]) {
     }
     let mut len = 2;
     while len <= n {
-        let angle = -2.0 * std::f32::consts::PI / len as f32;
+        let stride = n / len;
         for start in (0..n).step_by(len) {
             for k in 0..len / 2 {
-                let (wr, wi) = ((angle * k as f32).cos(), (angle * k as f32).sin());
+                let (wr, wi) = twiddles[k * stride];
                 let (a, b) = (start + k, start + k + len / 2);
                 let (tr, ti) = (re[b] * wr - im[b] * wi, re[b] * wi + im[b] * wr);
                 re[b] = re[a] - tr;

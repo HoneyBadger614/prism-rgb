@@ -820,7 +820,11 @@ pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64,
             }
             continue;
         }
-        let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface, t, world).scale(level);
+        // Effects that are one color everywhere are worked out once.
+        let same = matches!(layer.effect, Effect::TypingSpeed | Effect::CpuTemp | Effect::GpuTemp)
+            .then(|| surface.leds.first().map(|g| layer_color(layer, g, surface, t, world)))
+            .flatten();
+        let mut paint = |i: usize| flat[i] = same.unwrap_or_else(|| layer_color(layer, &surface.leds[i], surface, t, world)).scale(level);
         match &layer.target {
             Target::All => (0..total).for_each(&mut paint),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(&mut paint),

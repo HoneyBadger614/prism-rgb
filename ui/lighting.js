@@ -13,18 +13,47 @@ const Lighting = (() => {
   ];
 
   // Every effect: what it's called, what it does, which controls it uses
-  // (c1/c2 are color labels; missing = not used), and its starting settings.
+  // (c1/c2 are color labels; missing = not used; `more` names the added
+  // colors and numbers them from `from`; `direction` = can run the other
+  // way), and its starting settings. A `bg` effect's color 2 is a
+  // background. `typing` effects start on every LED.
+  const GROUPS = ["Colors", "Moving", "Typing", "Your computer"];
   const EFFECTS = {
-    static: { name: "Static", desc: "One solid color", c1: "Color", start: { color1: PURPLE } },
-    gradient: { name: "Gradient", desc: "One color fading into another", c1: "From", c2: "To", spread: true, start: { color1: PURPLE, color2: PINK } },
-    wave: { name: "Wave", desc: "A gradient that keeps flowing", c1: "Color 1", c2: "Color 2", spread: true, speed: true, start: { color1: PURPLE, color2: PINK } },
-    breathe: { name: "Breathe", desc: "Slowly fades in and out", c1: "Color 1", c2: "Color 2", speed: true, start: { color1: PURPLE, color2: PINK, speed: 3 } },
-    rainbow: { name: "Rainbow", desc: "Every color, flowing", spread: true, speed: true, start: { speed: 4 } },
-    "color-cycle": { name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
-    comet: { name: "Comet", desc: "A bright head with a fading tail", c1: "Head", c2: "Background", spread: true, speed: true, start: { color1: PINK, color2: "#140624", spread: "per-fan" } },
-    strobe: { name: "Strobe", desc: "Fast flashing", c1: "Flash", c2: "Between", speed: true, start: { color1: WHITE, color2: "#000000", speed: 4 } },
-    "key-glow": { name: "Key glow", desc: "Each key you press lights up, then fades. Only that key", c1: "Glow 1", palette: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
-    ripple: { name: "Typing ripple", desc: "Rings spread from each key you press, over your other layers. Add it to each device you want them on", c1: "Ripple 1", palette: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
+    static: { group: "Colors", name: "Static", desc: "One solid color", c1: "Color", start: { color1: PURPLE } },
+    gradient: { group: "Colors", name: "Gradient", desc: "Colors fading into each other", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, spread: true, start: { color1: PURPLE, color2: PINK } },
+    wave: { group: "Colors", name: "Wave", desc: "A gradient that keeps flowing", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, spread: true, direction: true, speed: true, start: { color1: PURPLE, color2: PINK } },
+    breathe: { group: "Colors", name: "Breathe", desc: "Slowly fades in and out, a color each breath", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, speed: true, start: { color1: PURPLE, color2: PINK, speed: 3 } },
+    rainbow: { group: "Colors", name: "Rainbow", desc: "Every color, flowing", spread: true, direction: true, speed: true, start: { speed: 4 } },
+    "color-cycle": { group: "Colors", name: "Color cycle", desc: "Everything drifts through every color together", speed: true, start: { speed: 4 } },
+    comet: { group: "Moving", bg: true, name: "Comet", desc: "A bright head with a fading tail", c1: "Head 1", c2: "Background", more: { name: "Head", from: 2 }, spread: true, direction: true, speed: true, start: { color1: PINK, color2: "#140624", spread: "per-fan" } },
+    strobe: { group: "Moving", bg: true, name: "Strobe", desc: "Fast flashing", c1: "Flash 1", c2: "Between", more: { name: "Flash", from: 2 }, speed: true, start: { color1: WHITE, color2: "#000000", speed: 4 } },
+    "key-glow": { group: "Typing", typing: true, name: "Key glow", desc: "Each key you press lights up, then fades. Only that key", c1: "Glow 1", more: { name: "Glow", from: 2 }, random: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
+    ripple: { group: "Typing", typing: true, name: "Typing ripple", desc: "Rings spread from each key you press, over your other layers. Add it to each device you want them on", c1: "Ripple 1", more: { name: "Ripple", from: 2 }, random: true, speed: true, start: { color1: PINK, speed: 5, palette: [], random: false } },
+    plasma: { group: "Colors", name: "Plasma", desc: "Soft blobs of color drifting and blending", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, speed: true, start: { color1: PURPLE, color2: "#22d3ee", palette: [PINK], speed: 4 } },
+    "color-split": { group: "Colors", name: "Color split", desc: "Each fan (or zone) its own color, passed along every few seconds", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, spread: true, direction: true, speed: true, start: { color1: PURPLE, color2: PINK, palette: ["#22d3ee"], speed: 4 } },
+    spin: { group: "Moving", bg: true, name: "Spin", desc: "Blades of color turning round each fan, one per color", c1: "Blade 1", c2: "Background", more: { name: "Blade", from: 2 }, direction: true, speed: true, start: { color1: PINK, color2: "#140624", palette: ["#22d3ee"] } },
+    marquee: { group: "Moving", name: "Marquee", desc: "Blocks of color stepping round, like theatre lights", c1: "Color 1", c2: "Color 2", more: { name: "Color", from: 3 }, spread: true, direction: true, speed: true, start: { color1: "#ffb000", color2: "#000000", spread: "per-fan", speed: 3 } },
+    twinkle: { group: "Moving", bg: true, name: "Twinkle", desc: "Stars twinkling at random", c1: "Star 1", c2: "Sky", more: { name: "Star", from: 2 }, speed: true, start: { color1: WHITE, color2: "#0b0620", palette: ["#22d3ee"], speed: 4 } },
+    fire: { group: "Moving", name: "Fire", desc: "Flickering flames, hotter further down", c1: "Embers", c2: "Flames", more: { name: "Hot", from: 1 }, speed: true, start: { color1: "#5a0000", color2: "#ff4500", palette: ["#ffc400"], speed: 5 } },
+    rain: { group: "Moving", bg: true, name: "Rain", desc: "Drops running down. Best on the keyboard", c1: "Drop 1", c2: "Background", more: { name: "Drop", from: 2 }, direction: true, speed: true, start: { color1: "#22e55b", color2: "#000000", speed: 4 } },
+    scanner: { group: "Moving", bg: true, name: "Scanner", desc: "One light sweeping back and forth", c1: "Light 1", c2: "Background", more: { name: "Light", from: 2 }, spread: true, direction: true, speed: true, start: { color1: "#ff1a1a", color2: "#000000", speed: 5 } },
+    heartbeat: { group: "Moving", bg: true, name: "Heartbeat", desc: "A double pulse, then a rest", c1: "Beat 1", c2: "Between", more: { name: "Beat", from: 2 }, speed: true, start: { color1: "#ff1a1a", color2: "#000000", speed: 5 } },
+    heatmap: { group: "Typing", typing: true, name: "Typing heatmap", desc: "Keys you press most glow warmer, then cool down", c1: "Cool", c2: "Warm", more: { name: "Hot", from: 1 }, speed: true, start: { color1: "#2d5bff", color2: "#ff7a00", palette: ["#ff1a1a"], speed: 5 } },
+    reactive: { group: "Typing", typing: true, name: "Reactive keys", desc: "Keys you press stay lit for a while, then fade", c1: "Key 1", more: { name: "Key", from: 2 }, random: true, speed: true, start: { color1: "#22d3ee", speed: 5, palette: [], random: false } },
+    "typing-speed": { group: "Typing", name: "Typing speed", desc: "Everything warms up the faster you type", c1: "Resting", c2: "Typing", more: { name: "Fast", from: 1 }, speed: true, start: { color1: "#2d5bff", color2: PURPLE, palette: ["#ff1a1a"], speed: 5 } },
+    "cpu-temp": { group: "Your computer", name: "CPU temperature", desc: "Cool to hot as the processor warms up (40–90 °C)", c1: "Cool", c2: "Warm", more: { name: "Hot", from: 1 }, start: { color1: "#2d5bff", color2: "#22e55b", palette: ["#ff7a00", "#ff1a1a"] } },
+    "gpu-temp": { group: "Your computer", name: "GPU temperature", desc: "Cool to hot as the graphics card warms up (40–90 °C)", c1: "Cool", c2: "Warm", more: { name: "Hot", from: 1 }, start: { color1: "#2d5bff", color2: "#22e55b", palette: ["#ff7a00", "#ff1a1a"] } },
+    music: { group: "Your computer", name: "Music", desc: "Follows what's playing, from the bass to the treble", c1: "Quiet", c2: "Loud", more: { name: "Louder", from: 1 }, bass: true, start: { color1: PURPLE, color2: PINK, palette: [WHITE] } },
+  };
+
+  // Music: where the bass goes on each device, as [label, spread, reverse].
+  // The treble is at the other end.
+  const BASS = {
+    node: [["Bass on the first fan", "across", false], ["Bass on the last fan", "across", true], ["Each fan: bass at the start", "per-fan", false], ["Each fan: bass halfway round", "per-fan", true]],
+    keyboard: [["Bass on the left", "across", false], ["Bass on the right", "across", true], ["Bass at the bottom", "per-fan", true], ["Bass at the top", "per-fan", false]],
+    mouse: [["Bass at the front", "across", false], ["Bass at the back", "across", true]],
+    gpu: [],
+    board: [["Bass at the start", "across", false], ["Bass at the end", "across", true], ["Each strip: bass at the start", "per-fan", false], ["Each strip: bass at the end", "per-fan", true]],
   };
 
   const ICON = {
@@ -410,24 +439,48 @@ const Lighting = (() => {
   /* ---------- effect picker ---------- */
 
   // CSS background that shows an effect, using the given colors.
-  function thumbCss(effect, c1, c2) {
+  function thumbCss(effect, c1, c2, more = []) {
+    const all = [c1, c2, ...more].join(", ");
     switch (effect) {
       case "static": return c1;
-      case "gradient": case "wave": return `linear-gradient(90deg, ${c1}, ${c2}, ${c1})`;
-      case "breathe": return `linear-gradient(90deg, ${c1}, ${c2})`;
+      case "gradient": case "breathe": return `linear-gradient(90deg, ${all})`;
+      case "wave": return `linear-gradient(90deg, ${all}, ${c1})`;
       case "rainbow": case "color-cycle": return "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)";
       case "comet": return `linear-gradient(90deg, ${c2} 0 45%, ${c1} 70%, ${c2} 72%)`;
       case "strobe": return c1;
       case "key-glow": return `radial-gradient(circle at 50% 50%, ${c1} 0 18%, #140624 40%)`;
       case "ripple": { const bg = "#140624"; return `radial-gradient(circle, ${bg} 0 18%, ${c1} 22% 30%, ${bg} 34% 48%, ${c1} 52% 58%, ${bg} 62%)`; }
+      case "plasma": return `radial-gradient(circle at 25% 35%, ${c1}, transparent 55%), radial-gradient(circle at 75% 65%, ${c2}, transparent 55%), ${more[0] || c1}`;
+      case "color-split": return `linear-gradient(90deg, ${blocks([c1, c2, ...more])})`;
+      case "spin": {
+        const blades = more.length ? [c1, ...more] : [c1, c1];
+        const at = (i, f) => `${((i + f) * 100) / blades.length}%`;
+        return `conic-gradient(${blades.map((c, i) => `${c2} ${at(i, 0)}, ${c} ${at(i, 0.15)} ${at(i, 0.45)}, ${c2} ${at(i, 0.45)} ${at(i, 1)}`).join(", ")})`;
+      }
+      case "marquee": return `repeating-linear-gradient(90deg, ${[c1, c2, ...more].map((c, i) => `${c} ${i * 12}px ${(i + 1) * 12}px`).join(", ")})`;
+      case "twinkle": return [c1, more[0] || c1, c1, more[1] || c1].map((c, i) => `radial-gradient(circle at ${[18, 64, 40, 84][i]}% ${[30, 24, 72, 66][i]}%, ${c} 0 2px, transparent 4px)`).join(", ") + `, ${c2}`;
+      case "fire": return `linear-gradient(0deg, ${[c1, c2, ...more].reverse().join(", ")})`;
+      case "rain": return `repeating-linear-gradient(90deg, ${c2} 0 9px, transparent 9px 12px), repeating-linear-gradient(180deg, ${c2} 0 14px, ${c1} 14px 22px)`;
+      case "scanner": return `linear-gradient(90deg, ${c2} 0 42%, ${c1} 50%, ${c2} 58%)`;
+      case "heartbeat": return `radial-gradient(circle, ${c1} 0 22%, ${c2} 60%)`;
+      case "heatmap": return `radial-gradient(circle at 40% 55%, ${more.at(-1) || c2} 0 10%, ${c2} 24%, ${c1} 40%, #140624 62%)`;
+      case "reactive": return `radial-gradient(circle at 30% 50%, ${c1} 0 12%, transparent 16%), radial-gradient(circle at 62% 50%, ${more[0] || c1} 0 12%, transparent 16%), #140624`;
+      case "typing-speed": case "cpu-temp": case "gpu-temp": return `linear-gradient(90deg, ${all})`;
+      case "music": return `repeating-linear-gradient(90deg, #140624 0 3px, transparent 3px 11px), linear-gradient(0deg, ${all} 70%, #140624 70%)`;
     }
     return c1;
   }
 
-  function thumb(effect, c1, c2) {
+  // Equal hard-edged blocks of each color, for a CSS gradient.
+  function blocks(colors) {
+    return colors.map((c, i) => `${c} ${(i * 100) / colors.length}% ${((i + 1) * 100) / colors.length}%`).join(", ");
+  }
+
+  function thumb(effect, c1, c2, more) {
     const t = el("span", `fx-thumb fx-${effect}`);
-    t.style.background = thumbCss(effect, c1, c2);
+    t.style.background = thumbCss(effect, c1, c2, more);
     if (effect === "strobe") t.style.setProperty("--off", c2);
+    if (effect === "marquee") t.style.setProperty("--period", `${(2 + (more || []).length) * 12}px`);
     return t;
   }
 
@@ -436,34 +489,37 @@ const Lighting = (() => {
     const l = layer();
     $("fx-title").textContent = mode === "add" ? "Add effect" : "Change effect";
     $("fx-sub").textContent = mode === "add"
-      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)} (Key glow and Typing ripple: all ${unit(2)})` : `all ${unit(2)}`}.`
+      ? `Adds a new layer on top, lit on ${selection.size ? `your ${selection.size} selected ${unit(selection.size)} (typing effects: all ${unit(2)})` : `all ${unit(2)}`}.`
       : `For the layer “${l.name}”. Its colors and LEDs stay the same.`;
     const combos = { node: COMBOS, keyboard: KEY_COMBOS, mouse: MOUSE_COMBOS }[dev] || [];
     $("fx-combos-wrap").hidden = mode !== "add" || !combos.length;
 
-    $("fx-effects").replaceChildren(...Object.entries(EFFECTS).map(([k, e]) => {
+    const cards = Object.entries(EFFECTS).map(([k, e]) => {
       const card = el("button", "fx-card" + (mode === "change" && l.effect === k ? " current" : ""));
       const c1 = mode === "change" && e.c1 ? l.color1 : e.start.color1 || PURPLE;
       const c2 = mode === "change" && e.c2 ? l.color2 : e.start.color2 || PINK;
-      card.append(thumb(k, c1, c2), el("span", "fx-name", e.name), el("span", "fx-desc", e.desc));
+      const more = mode === "change" && e.more ? l.palette || [] : [];
+      card.append(thumb(k, c1, c2, more), el("span", "fx-name", e.name), el("span", "fx-desc", e.desc));
       card.addEventListener("click", () => {
         closePicker();
         if (pickerMode === "change") {
           const keep = { effect: k, name: l.name === EFFECTS[l.effect].name ? e.name : l.name };
-          if (k === "comet" || k === "strobe") Object.assign(keep, e.start, { color1: l.color1 });
+          // The colors stay. Only a move to a background effect swaps
+          // color 2 for a dark background, so it doesn't light everything.
+          if (e.bg && !EFFECTS[l.effect].bg) keep.color2 = e.start.color2;
           if (!e.c2 && activeSlot === "color2") activeSlot = "color1";
           hsv = null;
           editLayer(keep);
         } else {
           // Effects that react to typing start on everything; others on the
           // selection, if there is one.
-          const reacts = k === "ripple" || k === "key-glow";
-          const target = selection.size && !reacts ? ledsTarget([...selection]) : { kind: "all" };
+          const target = selection.size && !e.typing ? ledsTarget([...selection]) : { kind: "all" };
           pushLayers([newLayer(k, { target })]);
         }
       });
-      return card;
-    }));
+      return [e.group, card];
+    });
+    $("fx-effects").replaceChildren(...GROUPS.flatMap((g) => [el("h3", "fx-group", g), ...cards.filter(([cg]) => cg === g).map(([, c]) => c)]));
 
     $("fx-combos").replaceChildren(...combos.map((c) => {
       const card = el("button", "fx-card");
@@ -503,7 +559,7 @@ const Lighting = (() => {
       eye.setAttribute("aria-label", eye.title);
       eye.addEventListener("click", (e) => { e.stopPropagation(); l.enabled = !l.enabled; changed(); });
 
-      const sw = thumb(l.effect, l.color1, l.color2);
+      const sw = thumb(l.effect, l.color1, l.color2, fx.more ? l.palette || [] : []);
       sw.classList.add("layer-swatch");
 
       const text = el("span", "layer-text");
@@ -1156,8 +1212,9 @@ const Lighting = (() => {
 
     const t = $("effect-thumb");
     t.className = `effect-thumb fx-thumb fx-${l.effect}`;
-    t.style.background = thumbCss(l.effect, l.color1, l.color2);
+    t.style.background = thumbCss(l.effect, l.color1, l.color2, fx.more ? l.palette || [] : []);
     t.style.setProperty("--off", l.color2);
+    t.style.setProperty("--period", `${(2 + (l.palette || []).length) * 12}px`);
     $("effect-name").textContent = fx.name;
     $("effect-desc").textContent = fx.desc;
     renderRippleNote(l);
@@ -1167,11 +1224,21 @@ const Lighting = (() => {
     $("target-all").textContent = describeTarget({ kind: "all" });
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.spread === l.spread)));
+    document.querySelectorAll("[data-reverse]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.reverse === String(!!l.reverse))));
     const SPREAD = { node: ["Across fans", "Per fan"], keyboard: ["Left to right", "Top to bottom"], mouse: ["Front to back", "Back to front"], gpu: ["", ""], board: ["Across everything", "Along each strip"] };
     $("spread-across").textContent = SPREAD[dev][0];
     $("spread-per-fan").textContent = SPREAD[dev][1];
     $("field-colors").hidden = !fx.c1;
     $("field-spread").hidden = !fx.spread || dev === "gpu"; // one light: nothing to spread over
+    $("field-direction").hidden = !fx.direction || dev === "gpu";
+    const bass = fx.bass ? BASS[dev] : [];
+    $("field-bass").hidden = !bass.length;
+    $("bass-options").replaceChildren(...bass.map(([name, spread, reverse]) => {
+      const b = el("button", null, name);
+      b.setAttribute("aria-pressed", String(l.spread === spread && !!l.reverse === reverse));
+      b.addEventListener("click", () => editLayer({ spread, reverse }));
+      return b;
+    }));
     $("field-speed").hidden = !fx.speed;
     $("slot-2").hidden = !fx.c2;
     $("slot-1-name").textContent = fx.c1 || "";
@@ -1189,7 +1256,7 @@ const Lighting = (() => {
     $("slot-2").classList.toggle("active", activeSlot === "color2");
     $("slot-1").setAttribute("aria-selected", String(activeSlot === "color1"));
     $("slot-2").setAttribute("aria-selected", String(activeSlot === "color2"));
-    if (fx.c1 && !(fx.palette && l.random)) syncPicker();
+    if (fx.c1 && !(fx.random && l.random)) syncPicker();
 
     $("brightness").value = l.brightness;
     $("brightness").style.setProperty("--fill", `${l.brightness}%`);
@@ -1243,7 +1310,7 @@ const Lighting = (() => {
   }
 
   // The color being edited: "color1", "color2", or "p0", "p1"... for a
-  // ripple's extra colors.
+  // layer's added colors.
   function slotColor() {
     const l = layer();
     if (activeSlot.startsWith("p")) return (l.palette || [])[Number(activeSlot.slice(1))] || l.color1;
@@ -1263,16 +1330,17 @@ const Lighting = (() => {
     editLayer(slotPatch(hsvToHex(hsv)));
   }
 
-  // A ripple's extra colors: one slot each, plus Add; or random colors.
+  // A layer's added colors: one slot each, plus Add; or, for typing
+  // effects, random colors.
   function renderPalette(l, fx) {
     const row = $("palette-row");
-    const on = !!fx.palette;
-    row.hidden = !on || l.random;
-    $("random-row").hidden = !on;
-    $("random-hint").hidden = !on || !l.random;
-    $("random-colors").checked = !!l.random;
-    if (!on) return;
-    if (l.random) {
+    const random = !!fx.random && !!l.random;
+    row.hidden = !fx.more || random;
+    $("random-row").hidden = !fx.random;
+    $("random-hint").hidden = !random;
+    $("random-colors").checked = random;
+    if (!fx.more) return;
+    if (random) {
       $("color-slots").hidden = true;
       $("picker").hidden = true;
       $("quick-colors").hidden = true;
@@ -1285,7 +1353,7 @@ const Lighting = (() => {
       const chip = el("span", "chip");
       chip.style.setProperty("--chip", c);
       const txt = el("span");
-      txt.append(el("span", "slot-name", `${(fx.c1 || "Color 1").replace(/ 1$/, "")} ${i + 2}`), el("span", "slot-hex", c));
+      txt.append(el("span", "slot-name", `${fx.more.name} ${i + fx.more.from}`), el("span", "slot-hex", c));
       const x = el("span", "chip-x", "×");
       x.title = "Remove this color";
       x.addEventListener("click", (e) => {
@@ -1472,6 +1540,7 @@ const Lighting = (() => {
     $("paint-swatches").replaceChildren(...QUICK_COLORS.map(([n, hex]) => swatch(`Paint ${n.toLowerCase()}`, hex, () => paint(hex))));
 
     document.querySelectorAll("[data-spread]").forEach((b) => b.addEventListener("click", () => editLayer({ spread: b.dataset.spread })));
+    document.querySelectorAll("[data-reverse]").forEach((b) => b.addEventListener("click", () => editLayer({ reverse: b.dataset.reverse === "true" })));
     document.querySelectorAll("[data-slot]").forEach((b) => b.addEventListener("click", () => {
       activeSlot = b.dataset.slot;
       hsv = null;

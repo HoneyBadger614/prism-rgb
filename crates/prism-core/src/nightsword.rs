@@ -582,7 +582,7 @@ pub fn surface_for(m: &MouseModel) -> crate::effects::Surface {
     if pts.len() == 1 {
         pts.push((4.0, -1.0)); // a grid needs two points to measure; the extra is unused
         let s = crate::effects::Surface::grid(&pts);
-        return crate::effects::Surface { channels: vec![1], leds: s.leds[..1].to_vec(), laps: s.laps };
+        return crate::effects::Surface { channels: vec![1], leds: s.leds[..1].to_vec(), laps: s.laps, rings: false };
     }
     crate::effects::Surface::grid(&pts)
 }

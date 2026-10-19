@@ -9,6 +9,7 @@ mod mouse_buttons;
 mod mouse_save;
 mod remap;
 mod report;
+mod sensors;
 mod tray;
 
 use std::time::Duration;

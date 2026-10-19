@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
-use prism_core::effects::{desk, node_layout, onboard_lights, render_layers_in, ripple_alive, Effect, Ripple, World, Layer, LightingStore, OnboardLight, Profile, Surface};
+use prism_core::effects::{desk, node_layout, onboard_lights, render_layers_in, Effect, Ripple, World, Layer, LightingStore, OnboardLight, Profile, Surface};
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
@@ -214,6 +214,8 @@ impl Engine {
             // hears presses while a ripple layer is on.
             let mut ripples: Vec<Ripple> = Vec::new();
             let mut presses: u64 = 0;
+            // Temperatures and music, read while a layer shows them.
+            let mut sensors = crate::sensors::SensorHub::new();
             // Device report: which product's presses to record, and the light walk.
             let mut capture: Option<(u16, Vec<u16>)> = None;
             let mut test_light: Option<TestLight> = None;
@@ -237,18 +239,21 @@ impl Engine {
                 // blanks its lights until colors arrive.
                 let t = start.elapsed().as_secs_f64();
                 let profile = cfg.active_profile().unwrap_or(&empty);
-                ripples.retain(|r| ripple_alive(r, t));
-                let want_presses = [&profile.layers, &profile.keyboard, &profile.mouse, &profile.gpu, &profile.motherboard]
-                    .iter()
-                    .any(|ls| ls.iter().any(|l| l.enabled && matches!(l.effect, Effect::Ripple | Effect::KeyGlow)));
-                let want_presses = want_presses || capture.is_some();
+                let all_layers = || [&profile.layers, &profile.keyboard, &profile.mouse, &profile.gpu, &profile.motherboard].into_iter().flatten();
+                // Presses are kept as long as the longest-lasting typing effect shows them.
+                let memory = all_layers().map(Layer::press_memory).fold(0.0, f64::max);
+                ripples.retain(|r| t - r.t0 < memory);
+                let showing = |effects: &[Effect]| all_layers().any(|l| l.enabled && effects.contains(&l.effect));
+                sensors.want(showing(&[Effect::CpuTemp, Effect::GpuTemp]), showing(&[Effect::Music]));
+                let readings = sensors.read();
+                let want_presses = all_layers().any(|l| l.enabled && l.effect.reacts_to_typing()) || capture.is_some();
                 if want_presses != watcher.is_some() {
                     watcher = want_presses.then(prism_input::PressWatcher::start);
                     if !want_presses {
                         ripples.clear();
                     }
                 }
-                let on = |place| World { ripples: &ripples, place };
+                let on = |place| World { ripples: &ripples, place, sensors: readings };
                 if fans_cache.as_ref().map_or(true, |(n, _)| *n != cfg.node_channels) {
                     fans_cache = Some((cfg.node_channels.clone(), Surface::fans(&node_layout(&cfg))));
                 }
@@ -511,7 +516,7 @@ impl Engine {
                                 ripples.push(Ripple { t0, x, y, n: presses, glow_only: i > 0 });
                             }
                             presses += 1;
-                            while ripples.len() > 64 {
+                            while ripples.len() > 512 {
                                 ripples.remove(0);
                             }
                         }

@@ -30,19 +30,22 @@ pub const MAX_PALETTE: usize = 15;
 pub enum Effect {
     /// Color 1 everywhere.
     Static,
-    /// Color 1 fading into color 2.
+    /// Color 1 fading into color 2 (then into each palette color).
     Gradient,
-    /// The gradient flowing along the LEDs.
+    /// The gradient flowing along the LEDs, looping back to color 1.
     Wave,
-    /// Fading in and out, alternating between the two colors.
+    /// Fading in and out, each breath the next color (color 1, color 2,
+    /// then the palette).
     Breathe,
     /// Every color of the rainbow, flowing.
     Rainbow,
     /// All LEDs together, slowly moving through every color.
     ColorCycle,
     /// A bright head (color 1) with a fading tail, running over color 2.
+    /// Each lap the head takes the next color (color 1, then the palette).
     Comet,
-    /// Flashing between color 1 and color 2.
+    /// Flashing color 1 over color 2. Each flash takes the next color
+    /// (color 1, then the palette).
     Strobe,
     /// Rings spreading from each key press, over whatever the layers below
     /// show. Each press takes the next color (color 1, then the palette),
@@ -52,14 +55,62 @@ pub enum Effect {
     /// Each pressed key lights up, then fades back to the layers below
     /// (black if none). Only that key. Colors as for [`Effect::Ripple`].
     KeyGlow,
+    /// Arcs of color turning round, one per color (color 1, then the
+    /// palette), over color 2.
+    Spin,
+    /// Blocks of color (color 1, color 2, then the palette) stepping along,
+    /// like theatre lights.
+    Marquee,
+    /// LEDs twinkling at random over color 2, in color 1 and the palette.
+    Twinkle,
+    /// Flickering flames: color 1 (embers) up through color 2 and the palette.
+    Fire,
+    /// Soft blobs of color 1, color 2 and the palette, drifting and blending.
+    Plasma,
+    /// Drops running down columns over color 2, in color 1 and the palette.
+    Rain,
+    /// One light sweeping back and forth over color 2. Each sweep takes the
+    /// next color (color 1, then the palette).
+    Scanner,
+    /// A double pulse, then a rest, over color 2. Each beat takes the next
+    /// color (color 1, then the palette).
+    Heartbeat,
+    /// One zone per fan (or one per color), the colors moving on between
+    /// them every few seconds.
+    ColorSplit,
+    /// Keys glow from color 1 toward color 2 (then the palette) the more
+    /// they're pressed, then cool down. Over the layers below.
+    Heatmap,
+    /// A pressed key lights up and stays lit for a while, then fades. Over
+    /// the layers below. Colors as for [`Effect::Ripple`].
+    Reactive,
+    /// Color 1 at rest, through color 2 and the palette the faster you type.
+    TypingSpeed,
+    /// Color 1 when the processor is cool, through to the last color when hot.
+    CpuTemp,
+    /// Color 1 when the graphics card is cool, through to the last color when hot.
+    GpuTemp,
+    /// Follows the music playing: bass at the start, treble at the end,
+    /// louder going from color 1 toward the last color.
+    Music,
 }
 
 impl Effect {
     /// Whether the colors change over time (and so need constant updates).
     pub fn is_animated(self) -> bool {
-        // A ripple only moves after a key press; the engine keeps drawing
-        // while one is spreading.
-        !matches!(self, Effect::Static | Effect::Gradient | Effect::Ripple | Effect::KeyGlow)
+        // Typing effects only change after a key press; the engine keeps
+        // drawing while a press still shows.
+        !matches!(self, Effect::Static | Effect::Gradient) && !self.reacts_to_typing()
+    }
+
+    /// Drawn over the layers below, where keys were pressed.
+    pub fn is_overlay(self) -> bool {
+        matches!(self, Effect::Ripple | Effect::KeyGlow | Effect::Heatmap | Effect::Reactive)
+    }
+
+    /// Needs key presses.
+    pub fn reacts_to_typing(self) -> bool {
+        self.is_overlay() || self == Effect::TypingSpeed
     }
 }
 
@@ -99,10 +150,13 @@ pub struct Layer {
     /// 1 (slow) to 10 (fast).
     pub speed: u8,
     pub target: Target,
-    /// More colors after color 1, taken in turn (ripples).
+    /// More colors: after color 2 for gradients, waves and breathing; after
+    /// color 1 for the head, flash or ripple colors taken in turn.
     pub palette: Vec<Rgb>,
     /// A random bright color each time instead (ripples).
     pub random: bool,
+    /// Moving effects go the other way (round a fan, or across the LEDs).
+    pub reverse: bool,
 }
 
 impl Default for Layer {
@@ -119,6 +173,7 @@ impl Default for Layer {
             target: Target::All,
             palette: vec![],
             random: false,
+            reverse: false,
         }
     }
 }
@@ -320,6 +375,9 @@ pub struct Surface {
     /// How many times a comet goes round in each direction before starting
     /// over (once per fan when going across fans).
     pub laps: [f64; 2],
+    /// LEDs in rings (fans), so `cyc[1]` goes round each ring. Otherwise
+    /// things that turn go round the middle of the device.
+    pub rings: bool,
 }
 
 /// 0 → 0, 0.5 → 1, 1 → 0. Makes a fade that loops without a visible seam.
@@ -362,7 +420,7 @@ impl Surface {
         if let Some(first) = leds.first_mut() {
             first.lin[0] = 0.0;
         }
-        Self { channels: layout.iter().map(ChannelLayout::leds).collect(), leds, laps: [total_f, 1.0] }
+        Self { channels: layout.iter().map(ChannelLayout::leds).collect(), leds, laps: [total_f, 1.0], rings: true }
     }
 
     /// LEDs on a flat grid, like keys on a keyboard. `points` are (x, y)
@@ -383,7 +441,7 @@ impl Surface {
                 LedGeom { lin: u, cyc: [u[0] * 0.97, u[1] * 0.8] }
             })
             .collect();
-        Self { channels: vec![points.len()], leds, laps: [1.0, 1.0] }
+        Self { channels: vec![points.len()], leds, laps: [1.0, 1.0], rings: false }
     }
 
     /// LEDs in rows, one channel per row (like a motherboard's built-in
@@ -403,7 +461,7 @@ impl Surface {
                 n += 1;
             }
         }
-        Self { channels: lens.to_vec(), leds, laps: [1.0, 1.0] }
+        Self { channels: lens.to_vec(), leds, laps: [1.0, 1.0], rings: false }
     }
 
     /// Position in `leds` of a (channel, index) reference, if it exists.
@@ -532,7 +590,7 @@ pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -
     let still: Vec<Rgb> = render_layers(layers, surface, master, t).concat();
     let mut top: Vec<Option<usize>> = vec![None; surface.leds.len()];
     // Ripples can't play without Prism, so they don't count.
-    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && !matches!(l.effect, Effect::Ripple | Effect::KeyGlow)) {
+    for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && !l.effect.is_overlay()) {
         match &layer.target {
             Target::All => top.iter_mut().for_each(|t| *t = Some(n)),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(|i| top[i] = Some(n)),
@@ -576,20 +634,58 @@ impl Layer {
             let h = (n as f64 * 0.618_033_988_75).fract() * 360.0;
             return Rgb::from_hsv(h as f32, 1.0, 1.0);
         }
+        self.turn(n)
+    }
+
+    /// Color 1, then the palette, in turn: the `n`th of them, looping.
+    fn turn(&self, n: u64) -> Rgb {
         let count = 1 + self.palette.len() as u64;
         match n % count {
             0 => self.color1,
             i => self.palette[i as usize - 1],
         }
     }
+
+    /// Color 1, color 2, then the palette.
+    fn stops(&self) -> Vec<Rgb> {
+        [self.color1, self.color2].into_iter().chain(self.palette.iter().copied()).collect()
+    }
 }
 
-/// Where a device sits on the desk ([x, y, width, height]) and the ripples
-/// spreading over it, for effects that cross devices.
+/// A point `u` (0-1) along evenly spaced color stops, fading between them.
+fn along_stops(stops: &[Rgb], u: f64) -> Rgb {
+    let pos = u.clamp(0.0, 1.0) * (stops.len() - 1) as f64;
+    let i = (pos.floor() as usize).min(stops.len() - 2);
+    stops[i].mix(stops[i + 1], (pos - i as f64) as f32)
+}
+
+/// Like [`along_stops`], but looping: the last stop fades back into the first.
+fn around_stops(stops: &[Rgb], u: f64) -> Rgb {
+    let pos = u.rem_euclid(1.0) * stops.len() as f64;
+    let i = (pos.floor() as usize).min(stops.len() - 1);
+    stops[i].mix(stops[(i + 1) % stops.len()], (pos - i as f64) as f32)
+}
+
+/// How many frequency bands the music is split into, bass first.
+pub const BANDS: usize = 16;
+
+/// Readings from the computer that some effects show.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Sensors {
+    /// Degrees Celsius, if known.
+    pub cpu_temp: Option<f32>,
+    pub gpu_temp: Option<f32>,
+    /// How loud each band of the music playing is, 0-1, bass first.
+    pub bands: [f32; BANDS],
+}
+
+/// Where a device sits on the desk ([x, y, width, height]), the key presses
+/// spreading over it (for effects that cross devices), and the sensors.
 #[derive(Debug, Clone, Copy)]
 pub struct World<'a> {
     pub ripples: &'a [Ripple],
     pub place: [f64; 4],
+    pub sensors: Sensors,
 }
 
 /// Where each kind of device sits on the desk: the keyboard in front, the
@@ -621,10 +717,72 @@ fn glow_fade(speed: u8) -> f64 {
     2.2 - 0.2 * speed as f64
 }
 
-/// Whether a ripple started at `t0` is still spreading at `t`, at the
-/// fastest speed.
-pub fn ripple_alive(r: &Ripple, t: f64) -> bool {
-    (t - r.t0) * ripple_speed(1) < RIPPLE_REACH
+/// How long a heatmap key takes to cool most of the way, in seconds, for a
+/// layer `speed` of 1-10.
+fn heat_cooling(speed: u8) -> f64 {
+    22.0 - 2.0 * speed as f64
+}
+
+/// How long a reactive key stays fully lit, in seconds, for a layer `speed`
+/// of 1-10; then it fades over [`REACTIVE_FADE`].
+fn reactive_hold(speed: u8) -> f64 {
+    0.6 * (11 - speed.min(10)) as f64
+}
+const REACTIVE_FADE: f64 = 0.8;
+
+/// How far back typing speed looks, in seconds, for a layer `speed` of 1-10.
+fn typing_window(speed: u8) -> f64 {
+    3.3 - 0.3 * speed as f64
+}
+
+/// Temperatures shown as the first and last color, in degrees Celsius.
+pub const TEMP_COOL: f64 = 40.0;
+pub const TEMP_HOT: f64 = 90.0;
+
+impl Layer {
+    /// How long a key press still shows in this layer, in seconds (0 if it
+    /// doesn't react to typing).
+    pub fn press_memory(&self) -> f64 {
+        if !self.enabled {
+            return 0.0;
+        }
+        match self.effect {
+            Effect::Ripple => RIPPLE_REACH / ripple_speed(self.speed),
+            Effect::KeyGlow => glow_fade(self.speed),
+            Effect::Heatmap => 4.0 * heat_cooling(self.speed),
+            Effect::Reactive => reactive_hold(self.speed) + REACTIVE_FADE,
+            Effect::TypingSpeed => 5.0 * typing_window(self.speed),
+            _ => 0.0,
+        }
+    }
+}
+
+/// splitmix64's mixing step: every bit of `z` stirs every bit of the result.
+fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// A random-looking but repeatable number from `a` and `b`, 0 up to 1.
+fn hash(a: u64, b: u64) -> f64 {
+    (mix64(a.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ mix64(b)) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// A number of its own for each LED, from where it sits.
+fn led_id(g: &LedGeom) -> u64 {
+    [g.lin[0], g.lin[1], g.cyc[0], g.cyc[1]].iter().fold(0, |h, v| mix64(h ^ v.to_bits()))
+}
+
+/// Smooth random values over a plane, 0 to 1 (value noise).
+fn noise2(a: f64, b: f64, seed: u64) -> f64 {
+    let (ia, ib) = (a.floor(), b.floor());
+    let smooth = |f: f64| f * f * (3.0 - 2.0 * f);
+    let (sa, sb) = (smooth(a - ia), smooth(b - ib));
+    let at = |da: f64, db: f64| hash(seed ^ (ia + da) as i64 as u64, (ib + db) as i64 as u64);
+    let top = at(0.0, 0.0) + (at(1.0, 0.0) - at(0.0, 0.0)) * sa;
+    let bottom = at(0.0, 1.0) + (at(1.0, 1.0) - at(0.0, 1.0)) * sa;
+    top + (bottom - top) * sb
 }
 
 /// Every LED's color at `t` seconds, one list per channel of `surface`.
@@ -640,12 +798,18 @@ pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64,
 
     for layer in layers.iter().filter(|l| l.enabled) {
         let level = layer.brightness as f32 / 100.0;
-        if matches!(layer.effect, Effect::Ripple | Effect::KeyGlow) {
+        if layer.effect.is_overlay() {
             // Only the rings (or glowing keys) are painted, over what the
             // layers below show.
             let Some(w) = world else { continue };
             let mut ring = |i: usize| {
-                let found = if layer.effect == Effect::Ripple { ripple_at(layer, &surface.leds[i], t, w) } else { glow_at(layer, &surface.leds[i], t, w) };
+                let g = &surface.leds[i];
+                let found = match layer.effect {
+                    Effect::Ripple => ripple_at(layer, g, t, w),
+                    Effect::KeyGlow => glow_at(layer, g, t, w),
+                    Effect::Heatmap => heat_at(layer, g, t, w),
+                    _ => reactive_at(layer, g, t, w),
+                };
                 if let Some((c, glow)) = found {
                     flat[i] = flat[i].mix(c, glow as f32 * level);
                 }
@@ -656,7 +820,7 @@ pub fn render_layers_in(layers: &[Layer], surface: &Surface, master: u8, t: f64,
             }
             continue;
         }
-        let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface.laps, t, world).scale(level);
+        let mut paint = |i: usize| flat[i] = layer_color(layer, &surface.leds[i], surface, t, world).scale(level);
         match &layer.target {
             Target::All => (0..total).for_each(&mut paint),
             Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).for_each(&mut paint),
@@ -686,8 +850,7 @@ pub fn render(store: &LightingStore, layout: &[ChannelLayout], t: f64) -> Vec<Ve
 /// The brightest ripple ring over one LED: its color and how strongly
 /// (0-1). None if no ring is there.
 fn ripple_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
-    let [px, py, pw, ph] = w.place;
-    let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
+    let (x, y) = desk_spot(g, w);
     let v = ripple_speed(l.speed);
     w.ripples
         .iter()
@@ -705,36 +868,68 @@ fn ripple_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
 
 /// The brightest key glow on one LED: its color and how strongly (0-1).
 fn glow_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
-    let [px, py, pw, ph] = w.place;
-    let (x, y) = (px + g.lin[0] * pw, py + g.lin[1] * ph);
     let fade = glow_fade(l.speed);
-    w.ripples
-        .iter()
-        .filter(|r| t >= r.t0 && ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt() < GLOW_RADIUS)
-        .map(|r| (r, (1.0 - (t - r.t0) / fade).max(0.0)))
+    brightest_press(l, g, t, w, |age| 1.0 - age / fade)
+}
+
+/// A reactive key: fully lit for a while after the press, then fading.
+fn reactive_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
+    let hold = reactive_hold(l.speed);
+    brightest_press(l, g, t, w, |age| 1.0 - (age - hold).max(0.0) / REACTIVE_FADE)
+}
+
+/// A heatmap key: warmer for every recent press, cooling over time.
+fn heat_at(l: &Layer, g: &LedGeom, t: f64, w: &World) -> Option<(Rgb, f64)> {
+    let cool = heat_cooling(l.speed);
+    let heat: f64 = presses_on(g, t, w).map(|r| (-(t - r.t0) / cool).exp()).sum();
+    // 0 when cold, nearing 1 after many presses.
+    let h = 1.0 - (-heat / 4.0).exp();
+    (h > 0.002).then(|| (along_stops(&l.stops(), h), (h * 3.0).min(1.0)))
+}
+
+/// Where an LED sits on the desk.
+fn desk_spot(g: &LedGeom, w: &World) -> (f64, f64) {
+    let [px, py, pw, ph] = w.place;
+    (px + g.lin[0] * pw, py + g.lin[1] * ph)
+}
+
+/// The presses (so far) on the key this LED belongs to.
+fn presses_on<'a>(g: &LedGeom, t: f64, w: &World<'a>) -> impl Iterator<Item = &'a Ripple> {
+    let (x, y) = desk_spot(g, w);
+    w.ripples.iter().filter(move |r| t >= r.t0 && ((x - r.x).powi(2) + (y - r.y).powi(2)).sqrt() < GLOW_RADIUS)
+}
+
+/// The brightest press on this LED's key, `glow` giving how bright (0-1)
+/// for a press this many seconds ago; the latest wins a tie.
+fn brightest_press(l: &Layer, g: &LedGeom, t: f64, w: &World, glow: impl Fn(f64) -> f64) -> Option<(Rgb, f64)> {
+    presses_on(g, t, w)
+        .map(|r| (r, glow(t - r.t0).min(1.0)))
         .filter(|(_, glow)| *glow > 0.0)
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(r, glow)| (l.ripple_color(r.n), glow))
 }
 
-fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, _world: Option<&World>) -> Rgb {
+fn layer_color(l: &Layer, g: &LedGeom, surface: &Surface, t: f64, world: Option<&World>) -> Rgb {
+    let laps = surface.laps;
     let d = match l.spread {
         Spread::Across => 0,
         Spread::PerFan => 1,
     };
-    let x = g.cyc[d];
+    // Reversed: the LEDs in mirror order, so anything moving goes the
+    // other way (each LED's own spot stays where it is).
+    let x = if l.reverse { (-g.cyc[d]).rem_euclid(1.0) } else { g.cyc[d] };
     let speed = l.speed as f64;
+    // Along the spread, from 0 to 1, flipped when reversed.
+    let along = if l.reverse { 1.0 - g.lin[d] } else { g.lin[d] };
 
     match l.effect {
         Effect::Static => l.color1,
-        Effect::Gradient => l.color1.mix(l.color2, g.lin[d] as f32),
-        Effect::Wave => {
-            let phase = (x - t * speed * 0.06).rem_euclid(1.0);
-            l.color1.mix(l.color2, there_and_back(phase) as f32)
-        }
+        Effect::Gradient => along_stops(&l.stops(), g.lin[d]),
+        Effect::Wave => around_stops(&l.stops(), x - t * speed * 0.06),
         Effect::Breathe => {
             let phase = t * speed * 0.05;
-            let c = if (phase.floor() as i64) % 2 == 0 { l.color1 } else { l.color2 };
+            let stops = l.stops();
+            let c = stops[(phase.floor() as i64).rem_euclid(stops.len() as i64) as usize];
             let s = (std::f64::consts::PI * phase.fract()).sin();
             c.scale((s * s) as f32)
         }
@@ -744,16 +939,133 @@ fn layer_color(l: &Layer, g: &LedGeom, laps: [f64; 2], t: f64, _world: Option<&W
             // Across fans the head goes round each fan in turn; per fan it
             // circles every fan at once.
             let laps = laps[d];
-            let head = (t * speed * 0.12 / laps).rem_euclid(1.0);
-            let behind = (head - x).rem_euclid(1.0) * laps; // 0 at the head, in laps
-            let tail = (1.0 - behind / 0.4).max(0.0);
-            l.color2.mix(l.color1, (tail * tail) as f32)
+            let run = t * speed * 0.12 / laps; // how far the head has gone, in runs over the LEDs
+            let behind = (run - x).rem_euclid(1.0); // 0 at the head
+            let tail = (1.0 - behind * laps / 0.4).max(0.0);
+            // The color the head had when it passed this LED.
+            let head = l.turn((run - x).floor().max(0.0) as u64);
+            l.color2.mix(head, (tail * tail) as f32)
         }
         Effect::Strobe => {
-            if (t * speed * 0.8).rem_euclid(1.0) < 0.25 { l.color1 } else { l.color2 }
+            let flash = t * speed * 0.8;
+            if flash.rem_euclid(1.0) < 0.25 { l.turn(flash.floor().max(0.0) as u64) } else { l.color2 }
+        }
+        Effect::Spin => {
+            // Always round each fan's own rings (whatever the spread), or
+            // round the middle of a keyboard or anything else.
+            let round = if surface.rings {
+                g.cyc[1]
+            } else {
+                (g.lin[1] - 0.5).atan2(g.lin[0] - 0.5) / std::f64::consts::TAU + 0.5
+            };
+            let round = if l.reverse { (-round).rem_euclid(1.0) } else { round };
+            // One blade per color, and at least two so the turning shows.
+            let blades = (1 + l.palette.len()).max(2);
+            let u = (round - t * speed * 0.1).rem_euclid(1.0) * blades as f64;
+            let k = (u.floor() as usize).min(blades - 1);
+            let f = u - k as f64;
+            // A sharp leading edge with a short fading tail behind it.
+            let s = if f < 0.15 { (f / 0.15).powi(2) } else if f < 0.45 { 1.0 } else { 0.0 };
+            l.color2.mix(l.turn(k as u64), s as f32)
+        }
+        Effect::Marquee => {
+            let stops = l.stops();
+            // Six blocks round each fan (or across a keyboard), a step at a time.
+            let cells = (6.0 * laps[d]).round().max(6.0);
+            let cell = (x * cells).floor() as i64 - (t * speed * 0.6).floor() as i64;
+            stops[cell.rem_euclid(stops.len() as i64) as usize]
+        }
+        Effect::Twinkle => {
+            // Each LED has its own slow beat, and twinkles on some beats.
+            let id = led_id(g);
+            let beat = t * speed * 0.12 + hash(id, 0);
+            let n = beat.floor() as u64;
+            if hash(id, n + 1) < 0.4 {
+                let s = (std::f64::consts::PI * beat.fract()).sin().powi(2);
+                l.color2.mix(l.turn(mix64(id ^ n)), s as f32)
+            } else {
+                l.color2
+            }
+        }
+        Effect::Fire => {
+            // Flames flicker in columns, hotter further down (or along).
+            let slow = noise2(g.lin[0] * 8.0, t * speed * 0.5, 1);
+            let fast = noise2(g.lin[0] * 20.0 + g.lin[1] * 7.0, t * speed * 1.3, 2);
+            let base = 0.35 + 0.65 * g.lin[1];
+            along_stops(&l.stops(), base * (0.4 + 0.45 * slow + 0.3 * fast))
+        }
+        Effect::Plasma => {
+            let (px, py) = (g.lin[0], g.lin[1]);
+            let s = t * speed * 0.15;
+            let v = (px * 7.0 + s).sin()
+                + (py * 5.0 - s * 1.3).sin()
+                + ((px + py) * 4.0 + s * 0.7).sin()
+                + (((px - 0.5).powi(2) + (py - 0.5).powi(2)).sqrt() * 9.0 - s * 1.6).sin();
+            around_stops(&l.stops(), v / 8.0 + 0.5)
+        }
+        Effect::Rain => {
+            // Each column has its own drops, at its own pace.
+            let col = (g.lin[0] * 24.0).floor() as u64;
+            let fall = t * speed * 0.07 * (0.7 + 0.6 * hash(col, 11)) + hash(col, 12) * 3.0;
+            // The head runs from above the top to below the bottom.
+            let head = fall.fract() * 1.6 - 0.3;
+            let y = if l.reverse { 1.0 - g.lin[1] } else { g.lin[1] };
+            let behind = head - y;
+            if (0.0..0.35).contains(&behind) {
+                let s = (1.0 - behind / 0.35).powi(2);
+                l.color2.mix(l.turn(col + fall.floor() as u64), s as f32)
+            } else {
+                l.color2
+            }
+        }
+        Effect::Scanner => {
+            let sweeps = t * speed * 0.08;
+            let at = there_and_back(sweeps.rem_euclid(1.0));
+            let s = (1.0 - (along - at).abs() / 0.12).max(0.0);
+            l.color2.mix(l.turn(sweeps.floor() as u64), (s * s) as f32)
+        }
+        Effect::Heartbeat => {
+            // Speed 5 is 60 beats a minute.
+            let beats = t * speed * 0.2;
+            let f = beats.fract();
+            let bump = |at: f64, width: f64| (-((f - at) / width).powi(2)).exp();
+            let s = (bump(0.08, 0.05) + 0.7 * bump(0.3, 0.06)).min(1.0);
+            l.color2.mix(l.turn(beats.floor() as u64), s as f32)
+        }
+        Effect::ColorSplit => {
+            let stops = l.stops();
+            let n = stops.len();
+            // One zone per fan, or one per color on a single piece.
+            let zones = if laps[d] > 1.0 { laps[d] } else { n as f64 };
+            let zone = (x * zones).floor() as usize;
+            let step = t * speed * 0.05;
+            let k = step.floor() as usize;
+            // Hold, then fade into the next color.
+            let fade = ((step.fract() - 0.8) / 0.2).clamp(0.0, 1.0);
+            stops[(zone + k) % n].mix(stops[(zone + k + 1) % n], fade as f32)
+        }
+        Effect::TypingSpeed => {
+            let window = typing_window(l.speed);
+            // Presses a second, recent ones counting most.
+            let rate = world.map_or(0.0, |w| {
+                w.ripples.iter().filter(|r| !r.glow_only && t >= r.t0).map(|r| (-(t - r.t0) / window).exp()).sum::<f64>() / window
+            });
+            // The last color at 8 presses a second (about 100 words a minute).
+            along_stops(&l.stops(), rate / 8.0)
+        }
+        Effect::CpuTemp | Effect::GpuTemp => {
+            let temp = world.and_then(|w| if l.effect == Effect::CpuTemp { w.sensors.cpu_temp } else { w.sensors.gpu_temp });
+            along_stops(&l.stops(), temp.map_or(0.0, |c| (c as f64 - TEMP_COOL) / (TEMP_HOT - TEMP_COOL)))
+        }
+        Effect::Music => {
+            let bands = world.map_or([0.0; BANDS], |w| w.sensors.bands);
+            let pos = along * (BANDS - 1) as f64;
+            let i = (pos.floor() as usize).min(BANDS - 2);
+            let v = (bands[i] + (bands[i + 1] - bands[i]) * (pos - i as f64) as f32) as f64;
+            along_stops(&l.stops(), v).scale((0.15 + 0.85 * v) as f32)
         }
         // Drawn over the layers below in render_layers_in, never on its own.
-        Effect::Ripple | Effect::KeyGlow => BLACK,
+        Effect::Ripple | Effect::KeyGlow | Effect::Heatmap | Effect::Reactive => BLACK,
     }
 }
 
@@ -814,10 +1126,12 @@ mod tests {
         let all = [
             Effect::Static, Effect::Gradient, Effect::Wave, Effect::Breathe,
             Effect::Rainbow, Effect::ColorCycle, Effect::Comet, Effect::Strobe,
+            Effect::Spin, Effect::Marquee, Effect::Twinkle, Effect::Fire, Effect::Plasma,
+            Effect::Rain, Effect::Scanner, Effect::Heartbeat, Effect::ColorSplit,
         ];
         for e in all {
             let s = one(fx(e, Spread::Across));
-            let moved = (1..20).any(|i| render(&s, &three_fans(), 0.0) != render(&s, &three_fans(), i as f64 * 0.13));
+            let moved = (1..20).any(|i| render(&s, &three_fans(), 0.0) != render(&s, &three_fans(), i as f64 * 0.37));
             assert_eq!(moved, e.is_animated(), "{e:?}");
         }
     }
@@ -989,7 +1303,7 @@ mod tests {
         // Press 0 at the keyboard's left end: the left key lights first, the
         // right one (0.4 desk units away) once the ring gets there.
         let r = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 0, glow_only: false }];
-        let w = World { ripples: &r, place: desk::KEYBOARD };
+        let w = World { ripples: &r, place: desk::KEYBOARD, sensors: Sensors::default() };
         let at = |t: f64, rs: &World| render_layers_in(&[base.clone(), ripple.clone()], &kb, 100, t, Some(rs))[0].clone();
         assert_eq!(at(0.0, &w), vec![WHITE, PURPLE]); // ring color over the purple below
         let reach = 0.4 / (0.12 * 5.0);
@@ -997,11 +1311,11 @@ mod tests {
         assert_eq!(at(reach, &w)[0], PURPLE);
         // Press 1 takes the next color.
         let r1 = [Ripple { t0: 0.0, x: 0.30, y: 0.62, n: 1, glow_only: false }];
-        assert_eq!(at(0.0, &World { ripples: &r1, place: desk::KEYBOARD })[0], HOT_PINK);
+        assert_eq!(at(0.0, &World { ripples: &r1, place: desk::KEYBOARD, sensors: Sensors::default() })[0], HOT_PINK);
         // Without ripples the layers below show untouched.
         assert!(render_layers(&[base.clone(), ripple.clone()], &kb, 100, 1.0)[0].iter().all(|&c| c == PURPLE));
         assert!(!Effect::Ripple.is_animated());
-        assert!(!ripple_alive(&r[0], 20.0));
+        assert!(ripple.press_memory() < 20.0);
         // Random colors: bright and different from one press to the next.
         let rnd = Layer { random: true, ..ripple.clone() };
         assert_ne!(rnd.ripple_color(0), rnd.ripple_color(1));
@@ -1015,7 +1329,7 @@ mod tests {
         let glow = Layer { effect: Effect::KeyGlow, color1: WHITE, speed: 5, ..Default::default() };
         // A press exactly on the middle key (desk x = 0.30 + 0.5 * 0.40).
         let r = [Ripple { t0: 0.0, x: 0.50, y: 0.62, n: 0, glow_only: true }];
-        let w = World { ripples: &r, place: desk::KEYBOARD };
+        let w = World { ripples: &r, place: desk::KEYBOARD, sensors: Sensors::default() };
         let at = |t: f64| render_layers_in(&[glow.clone()], &kb, 100, t, Some(&w))[0].clone();
         assert_eq!(at(0.0), vec![BLACK, WHITE, BLACK]);
         assert!(at(0.6)[1].r > 0 && at(0.6)[1].r < 255);
@@ -1024,6 +1338,143 @@ mod tests {
         let ring = Layer { effect: Effect::Ripple, color1: WHITE, ..Default::default() };
         assert!(render_layers_in(&[ring], &kb, 100, 0.0, Some(&w))[0].iter().all(|&c| c == BLACK));
         assert!(!Effect::KeyGlow.is_animated());
+    }
+
+    #[test]
+    fn extra_colors_join_in() {
+        const BLUE: Rgb = Rgb::new(0, 0, 255);
+        let strip = Surface::strips(&[3]);
+        let with = |effect| Layer { effect, palette: vec![BLUE], ..Default::default() };
+        // Gradient: purple, pink, then blue along the strip.
+        assert_eq!(render_layers(&[with(Effect::Gradient)], &strip, 100, 0.0)[0], vec![PURPLE, HOT_PINK, BLUE]);
+        // Breathe: each breath the next color, then back to color 1.
+        let b = [with(Effect::Breathe)];
+        let at = |t: f64| render_layers(&b, &strip, 100, t)[0][0];
+        assert_eq!((at(2.0), at(6.0), at(10.0), at(14.0)), (PURPLE, HOT_PINK, BLUE, PURPLE));
+        // Wave: every color shows somewhere along the loop.
+        let wave = Surface::strips(&[30]);
+        let w = render_layers(&[with(Effect::Wave)], &wave, 100, 0.0)[0].clone();
+        assert!(w.iter().any(|c| c.b > 200 && c.r < 60), "{w:?}");
+        // Strobe: each flash takes the next color over color 2.
+        let s = [Layer { color2: BLACK, speed: 5, ..with(Effect::Strobe) }];
+        let at = |t: f64| render_layers(&s, &strip, 100, t)[0][0];
+        assert_eq!((at(0.0), at(0.1), at(0.25), at(0.5)), (PURPLE, BLACK, BLUE, PURPLE));
+        // Comet: the second lap's head is the next color.
+        let c = [Layer { color1: WHITE, color2: BLACK, spread: Spread::PerFan, speed: 5, ..with(Effect::Comet) }];
+        let lap = 1.0 / (5.0 * 0.12);
+        let heads = |t: f64| render_layers(&c, &Surface::strips(&[12]), 100, t)[0].iter().copied().max_by_key(|c| c.r as u16 + c.g as u16 + c.b as u16).unwrap();
+        let (first, second) = (heads(0.1 * lap), heads(1.1 * lap));
+        assert!(first.r > 200 && first.r == first.b, "{first:?}");
+        assert!(second.b > 200 && second.r == 0, "{second:?}");
+    }
+
+    #[test]
+    fn reverse_turns_the_other_way() {
+        let fan = Surface::fans(&[ChannelLayout::ll_fans(1)]);
+        for effect in [Effect::Wave, Effect::Rainbow, Effect::Comet] {
+            let fwd = Layer { effect, spread: Spread::PerFan, color1: WHITE, color2: BLACK, ..Default::default() };
+            let rev = Layer { reverse: true, ..fwd.clone() };
+            let ring = |l: &Layer, t: f64| render_layers(&[l.clone()], &fan, 100, t)[0][4..].to_vec();
+            // Reversed is the forward ring in mirror order, at every moment.
+            for t in [0.3, 1.7, 4.1] {
+                let (f, r) = (ring(&fwd, t), ring(&rev, t));
+                assert!((0..12).all(|k| r[k] == f[(12 - k) % 12]), "{effect:?} at {t}");
+                assert_ne!(f, r, "{effect:?} at {t}");
+            }
+        }
+        // Default off, and old settings without it load.
+        assert!(!Layer::default().reverse);
+        assert!(!serde_json::from_str::<Layer>(r#"{"effect":"wave"}"#).unwrap().reverse);
+    }
+
+    #[test]
+    fn typing_effects_remember_presses() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
+        // Three presses on the middle key, the last 1 s ago.
+        let r: Vec<Ripple> = (0..3).map(|n| Ripple { t0: n as f64, x: 0.50, y: 0.62, n, glow_only: false }).collect();
+        let w = World { ripples: &r, place: desk::KEYBOARD, sensors: Sensors::default() };
+        let base = Layer { effect: Effect::Static, color1: PURPLE, ..Default::default() };
+        let at = |l: &Layer, t: f64| render_layers_in(&[base.clone(), l.clone()], &kb, 100, t, Some(&w))[0].clone();
+
+        // Heatmap: only the pressed key warms, and it cools down again.
+        let heat = Layer { effect: Effect::Heatmap, color1: BLACK, color2: WHITE, speed: 5, ..Default::default() };
+        let warm = at(&heat, 3.0);
+        assert_eq!((warm[0], warm[2]), (PURPLE, PURPLE));
+        assert_ne!(warm[1], PURPLE);
+        assert_eq!(at(&heat, 3.0 + heat.press_memory() * 3.0)[1], PURPLE);
+
+        // Reactive: stays fully lit, then fades back.
+        let react = Layer { effect: Effect::Reactive, color1: WHITE, speed: 5, ..Default::default() };
+        assert_eq!(at(&react, 4.0), vec![PURPLE, WHITE, PURPLE]);
+        assert_eq!(at(&react, 2.0 + react.press_memory() + 0.1)[1], PURPLE);
+
+        // Typing speed: calm with no typing, warmer while typing.
+        let fast = Layer { effect: Effect::TypingSpeed, color1: BLACK, color2: WHITE, ..Default::default() };
+        let idle = render_layers_in(&[fast.clone()], &kb, 100, 0.0, Some(&World { ripples: &[], ..w }))[0][0];
+        let busy = render_layers_in(&[fast.clone()], &kb, 100, 2.1, Some(&w))[0][0];
+        assert_eq!(idle, BLACK);
+        assert!(busy.r > 0, "{busy:?}");
+        assert!(Effect::TypingSpeed.reacts_to_typing() && !Effect::TypingSpeed.is_overlay());
+        assert!(!Effect::Heatmap.is_animated() && Effect::Fire.is_animated());
+    }
+
+    #[test]
+    fn sensor_effects_follow_readings() {
+        let strip = Surface::strips(&[16]);
+        let sensors = Sensors { cpu_temp: Some(TEMP_HOT as f32), gpu_temp: Some(TEMP_COOL as f32), bands: [0.0; BANDS] };
+        let w = World { ripples: &[], place: desk::FANS, sensors };
+        let temp = |effect| render_layers_in(&[Layer { effect, color1: BLACK, color2: WHITE, ..Default::default() }], &strip, 100, 0.0, Some(&w))[0][0];
+        assert_eq!((temp(Effect::CpuTemp), temp(Effect::GpuTemp)), (WHITE, BLACK));
+
+        // Music: loud bass lights the start, quiet treble leaves the end dark.
+        let mut bands = [0.0; BANDS];
+        bands[0] = 1.0;
+        let w = World { sensors: Sensors { bands, ..sensors }, ..w };
+        let music = Layer { effect: Effect::Music, color1: WHITE, color2: WHITE, ..Default::default() };
+        let f = render_layers_in(&[music.clone()], &strip, 100, 0.0, Some(&w))[0].clone();
+        assert_eq!(f[0], WHITE);
+        assert!(f[15].r < 50, "{:?}", f[15]);
+        let rev = render_layers_in(&[Layer { reverse: true, ..music }], &strip, 100, 0.0, Some(&w))[0].clone();
+        assert_eq!(rev[15], WHITE);
+    }
+
+    #[test]
+    fn pattern_effects_use_their_colors() {
+        const BLUE: Rgb = Rgb::new(0, 0, 255);
+        // A keyboard-like grid, 20 keys by 6 rows.
+        let pts: Vec<(f64, f64)> = (0..120).map(|i| ((i % 20) as f64, (i / 20) as f64)).collect();
+        let grid = Surface::grid(&pts);
+        let frames = |l: Layer| (0..40).flat_map(|i| render_layers(&[l.clone()], &grid, 100, i as f64 * 0.37).remove(0)).collect::<Vec<_>>();
+        // Each shows color 1 and an added color somewhere, over time.
+        for effect in [Effect::Spin, Effect::Marquee, Effect::Twinkle, Effect::Rain, Effect::Scanner, Effect::Heartbeat, Effect::ColorSplit] {
+            let all = frames(Layer { effect, color1: WHITE, color2: BLACK, palette: vec![BLUE], ..Default::default() });
+            assert!(all.iter().any(|c| c.r > 200 && c.b > 200), "{effect:?} never shows color 1");
+            assert!(all.iter().any(|c| c.b > 200 && c.r < 30), "{effect:?} never shows the added color");
+        }
+        // Fire stays within its colors: no blue in red-to-yellow flames.
+        let fire = frames(Layer { effect: Effect::Fire, color1: Rgb::new(90, 0, 0), color2: Rgb::new(255, 69, 0), palette: vec![Rgb::new(255, 196, 0)], ..Default::default() });
+        assert!(fire.iter().all(|c| c.b == 0 && c.r >= 90));
+    }
+
+    #[test]
+    fn spin_turns_crisp_blades_round_each_fan() {
+        let layout = three_fans();
+        for spread in [Spread::Across, Spread::PerFan] {
+            let spin = Layer { effect: Effect::Spin, color1: WHITE, color2: BLACK, spread, ..Default::default() };
+            let f = render(&one(spin), &layout, 0.3);
+            for fan in 0..3 {
+                let ring = &f[0][fan * 16 + 4..fan * 16 + 16];
+                // Some LEDs full blade, some full background: not a soft wave.
+                assert!(ring.iter().filter(|&&c| c == WHITE).count() >= 4, "{spread:?} fan {fan}: {ring:?}");
+                assert!(ring.iter().filter(|&&c| c == BLACK).count() >= 4, "{spread:?} fan {fan}: {ring:?}");
+                // Every fan turns the same, whatever the spread.
+                assert_eq!(ring, &f[0][4..16]);
+            }
+        }
+        // A keyboard gets a sweep round its middle: corners differ.
+        let kb = Surface::grid(&[(0.0, 0.0), (2.0, 0.0), (0.0, 1.0), (2.0, 1.0)]);
+        let k = render_layers(&[Layer { effect: Effect::Spin, color1: WHITE, color2: BLACK, ..Default::default() }], &kb, 100, 0.0);
+        assert!(k[0].contains(&WHITE) && k[0].contains(&BLACK), "{k:?}");
     }
 
     #[test]

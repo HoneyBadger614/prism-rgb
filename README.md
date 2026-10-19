@@ -29,9 +29,22 @@ saves your setup into the devices' own memory, and then shrinks to a
 
 ### Lighting on every device, from one place
 
-- **10 effects:** static, gradient, wave, breathe, rainbow, color cycle,
-  comet and strobe, plus two that react to typing: Typing ripple and Key
-  glow.
+- **25 effects:**
+  - colors: static, gradient, wave, breathe, rainbow, color cycle,
+    plasma and color split
+  - moving: comet, strobe, spin, marquee, twinkle, fire, rain, scanner
+    and heartbeat
+  - typing: Typing ripple, Key glow, Typing heatmap, Reactive keys and
+    Typing speed
+  - your computer: CPU temperature and GPU temperature (cool at 40 °C,
+    hot at 90 °C), and Music, which follows whatever is playing (needs
+    `parec`, from PulseAudio or PipeWire's pulse tools). Temperatures come
+    from the kernel's sensors, or `nvidia-smi` for NVIDIA cards. Prism
+    only reads these while a layer shows them.
+- **Colors and direction:** most effects take as many colors as you add:
+  a gradient fades through them all, a breath, flash or heartbeat takes
+  the next one, and a comet's head changes color each lap. Moving effects
+  can run in reverse, so hubs and rings can turn opposite ways.
 - **Layers:** stack effects and paint them onto any LEDs you pick. Click
   keys, zones or fan LEDs, or drag a box around them.
 - **Profiles:** switch from the app or from the tray menu.
@@ -46,7 +59,7 @@ saves your setup into the devices' own memory, and then shrinks to a
   and the speed sets how quickly it fades. A mouse click glows the
   mouse's front.
 - **Typing effects only read where a key is.** Prism listens for presses
-  only while a Typing ripple or Key glow layer is on, and nothing about
+  only while a typing effect's layer is on, and nothing about
   what you type is recorded or stored.
 - **What's plugged in:** tell Prism which fans and strips are on each
   lighting-controller channel. It knows 18 kinds: LL, QL, HD, ML and SP
@@ -79,7 +92,8 @@ so it works with Prism closed, or on another computer. It saves:
 - mouse buttons acting as other mouse buttons
 - DPI stages and sniper DPI
 - lighting: Rainbow, Color cycle and Breathe become the device's own
-  moving effects; anything else is saved as a still picture.
+  moving effects (Breathe with its first two colors only); anything else
+  is saved as a still picture.
 
 Every save starts with a **full backup**, and every file is read back to
 check it. **Restore** shows exactly what would change before it writes

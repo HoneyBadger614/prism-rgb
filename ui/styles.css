@@ -343,7 +343,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 .fx-strobe { animation: fx-strobe .5s steps(1) infinite; }
 .fx-marquee { animation: fx-march 1.2s steps(2) infinite; }
 .fx-scanner { background-size: 200% 100% !important; animation: fx-scan 1.4s ease-in-out infinite alternate; }
-.fx-rain { animation: fx-fall 1s linear infinite; }
+.fx-rain { animation: fx-rain 1.6s linear infinite; }
 .fx-twinkle { animation: fx-breathe 1.8s ease-in-out infinite; }
 .fx-heartbeat { animation: fx-heart 1.1s linear infinite; }
 .fx-music { animation: fx-breathe .7s ease-in-out infinite; }
@@ -355,7 +355,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var
 @keyframes fx-strobe { 0% { opacity: 1; } 30% { opacity: .08; } }
 @keyframes fx-march { from { background-position: 0 0; } to { background-position: var(--period, 24px) 0; } }
 @keyframes fx-scan { from { background-position: 0 0; } to { background-position: 100% 0; } }
-@keyframes fx-fall { from { background-position: 0 0, 0 0; } to { background-position: 0 0, 0 22px; } }
+/* one position per drop in RAIN_DROPS (lighting.js), each falling whole repeats */
+@keyframes fx-rain { from { background-position: 5% 0px, 13% 22px, 21% 40px, 29% 9px, 37% 30px, 45% 5px, 53% 18px, 61% 36px, 69% 44px, 77% 14px, 85% 52px, 93% 26px; } to { background-position: 5% 56px, 13% 102px, 21% 104px, 29% 105px, 37% 86px, 45% 85px, 53% 82px, 61% 132px, 69% 100px, 77% 94px, 85% 116px, 93% 122px; } }
 @keyframes fx-heart { 0%, 40%, 100% { opacity: .25; } 8% { opacity: 1; } 16% { opacity: .45; } 24% { opacity: .85; } }
 @media (prefers-reduced-motion: reduce) { .fx-thumb { animation: none !important; } }
 

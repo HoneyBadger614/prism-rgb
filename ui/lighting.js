@@ -438,6 +438,11 @@ const Lighting = (() => {
 
   /* ---------- effect picker ---------- */
 
+  // Rain thumbnail drops: [across (%), repeat height (px), start (px)].
+  // The fx-rain keyframes in styles.css start from the same places and move
+  // each drop by a whole number of repeats.
+  const RAIN_DROPS = [[5, 56, 0], [13, 40, 22], [21, 64, 40], [29, 48, 9], [37, 56, 30], [45, 40, 5], [53, 64, 18], [61, 48, 36], [69, 56, 44], [77, 40, 14], [85, 64, 52], [93, 48, 26]];
+
   // CSS background that shows an effect, using the given colors.
   function thumbCss(effect, c1, c2, more = []) {
     const all = [c1, c2, ...more].join(", ");
@@ -460,7 +465,12 @@ const Lighting = (() => {
       case "marquee": return `repeating-linear-gradient(90deg, ${[c1, c2, ...more].map((c, i) => `${c} ${i * 12}px ${(i + 1) * 12}px`).join(", ")})`;
       case "twinkle": return [c1, more[0] || c1, c1, more[1] || c1].map((c, i) => `radial-gradient(circle at ${[18, 64, 40, 84][i]}% ${[30, 24, 72, 66][i]}%, ${c} 0 2px, transparent 4px)`).join(", ") + `, ${c2}`;
       case "fire": return `linear-gradient(0deg, ${[c1, c2, ...more].reverse().join(", ")})`;
-      case "rain": return `repeating-linear-gradient(90deg, ${c2} 0 9px, transparent 9px 12px), repeating-linear-gradient(180deg, ${c2} 0 14px, ${c1} 14px 22px)`;
+      case "rain": {
+        // Drops with fading tails, each column at its own height; the
+        // fx-rain animation lets them fall at different speeds.
+        const drops = [c1, ...more];
+        return RAIN_DROPS.map(([x, h, y], i) => `linear-gradient(180deg, transparent 0 30%, ${drops[i % drops.length]} 80%, transparent 80%) ${x}% ${y}px / 3px ${h}px repeat-y`).join(", ") + `, ${c2}`;
+      }
       case "scanner": return `linear-gradient(90deg, ${c2} 0 42%, ${c1} 50%, ${c2} 58%)`;
       case "heartbeat": return `radial-gradient(circle, ${c1} 0 22%, ${c2} 60%)`;
       case "heatmap": return `radial-gradient(circle at 40% 55%, ${more.at(-1) || c2} 0 10%, ${c2} 24%, ${c1} 40%, #140624 62%)`;

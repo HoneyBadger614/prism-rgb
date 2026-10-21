@@ -91,8 +91,7 @@ so it works with Prism closed, or on another computer. It saves:
 - single keys, media keys, combos and macros
 - mouse buttons acting as other mouse buttons
 - DPI stages and sniper DPI
-- lighting that keeps moving (the effects added in 0.1.5 are worked out
-  from iCUE's saves but not yet checked on the devices):
+- lighting that keeps moving:
   - keyboard: Breathe, Color cycle, Strobe and Heartbeat play as in
     Prism, saved as a loop of colors up to 25.5 seconds long (slower
     Breathes and Color cycles use the keyboard's pulse or rainbow

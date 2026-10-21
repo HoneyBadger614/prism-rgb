@@ -91,9 +91,17 @@ so it works with Prism closed, or on another computer. It saves:
 - single keys, media keys, combos and macros
 - mouse buttons acting as other mouse buttons
 - DPI stages and sniper DPI
-- lighting: Rainbow, Color cycle and Breathe become the device's own
-  moving effects (Breathe with its first two colors only); anything else
-  is saved as a still picture.
+- lighting that keeps moving (the effects added in 0.1.5 are worked out
+  from iCUE's saves but not yet checked on the devices):
+  - keyboard: Breathe, Color cycle, Strobe and Heartbeat play as in
+    Prism, saved as a loop of colors up to 25.5 seconds long (slower
+    Breathes and Color cycles use the keyboard's pulse or rainbow
+    instead). Rainbow, Wave, Rain, Scanner, Typing ripple and Key glow
+    become the keyboard's own versions of them, with your first two
+    colors, at one of its three speeds.
+  - mouse: Rainbow, Color cycle and Breathe become its own effects
+    (Breathe with its first two colors only).
+  - anything else is saved as a still picture.
 
 Every save starts with a **full backup**, and every file is read back to
 check it. **Restore** shows exactly what would change before it writes

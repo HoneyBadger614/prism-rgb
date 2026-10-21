@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidApi;
 use prism_core::bindings::{DpiOp, DpiSettings};
-use prism_core::effects::{desk, node_layout, onboard_lights, render_layers_in, Effect, Ripple, World, Layer, LightingStore, OnboardLight, Profile, Surface};
+use prism_core::effects::{desk, node_layout, onboard_lights, onboard_typing, render_layers_in, Effect, Ripple, World, Layer, LightingStore, OnboardDevice, OnboardLight, OwnEffect, Profile, Surface};
 use prism_core::asus_aura::{self, AsusAura};
 use prism_core::k65_mini::{self, K65Mini, Key};
 use prism_core::msi_gpu::{FoundGpu, MsiGpu};
@@ -419,7 +419,7 @@ impl Engine {
                     Ok(Msg::MouseSave(folder, lighting, dir, name, done)) => {
                         // Each zone's light: the mouse's own effect where it
                         // has one, otherwise its color right now.
-                        let lights = onboard_lights(&cfg.active_profile().unwrap_or(&empty).mouse, &devices.mouse, cfg.brightness, t);
+                        let lights = onboard_lights(&cfg.active_profile().unwrap_or(&empty).mouse, &devices.mouse, cfg.brightness, t, OnboardDevice::Mouse);
                         let picture: Vec<(&str, OnboardLight)> = nightsword::ZONES.iter().map(|z| z.0).zip(lights).collect();
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match (&mouse.dev, api.as_ref()) {
@@ -445,11 +445,22 @@ impl Engine {
                         let _ = done.send(r);
                     }
                     Ok(Msg::KbSave(root, lighting, dir, name, done)) => {
-                        let lights = onboard_lights(&cfg.active_profile().unwrap_or(&empty).keyboard, &devices.keyboard, cfg.brightness, t);
+                        let layers = &cfg.active_profile().unwrap_or(&empty).keyboard;
+                        let lights = onboard_lights(layers, &devices.keyboard, cfg.brightness, t, OnboardDevice::Keyboard);
                         let mut picture: Vec<(u8, OnboardLight)> =
                             devices.keys.iter().zip(&lights).flat_map(|(k, l)| k.slots.iter().map(move |&s| (s, *l))).collect();
                         picture.sort_by_key(|(s, _)| *s);
                         picture.dedup_by_key(|(s, _)| *s);
+                        // Typing ripples and key glows, as the keyboard's own.
+                        let typing: Vec<(OwnEffect, Vec<u8>)> = onboard_typing(layers, &devices.keyboard, cfg.brightness)
+                            .into_iter()
+                            .map(|(e, leds)| {
+                                let mut slots: Vec<u8> = leds.iter().filter_map(|&i| devices.keys.get(i)).flat_map(|k| k.slots.iter().copied()).collect();
+                                slots.sort();
+                                slots.dedup();
+                                (e, slots)
+                            })
+                            .collect();
                         let profile = cfg.active_profile().unwrap_or(&empty).clone();
                         let r = match &kb.dev {
                             Some(k) => {
@@ -464,7 +475,7 @@ impl Engine {
                                         .iter()
                                         .filter_map(|(f, _)| f.strip_suffix(".bin").and_then(|h| u16::from_str_radix(h, 16).ok()))
                                         .collect();
-                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, lighting.then_some(picture.as_slice()), b.created)
+                                    crate::kb_save::save(k, &devices.keys, &profile, root, &existing, lighting.then_some((picture.as_slice(), typing.as_slice())), b.created)
                                 }
                             }
                             None => Err("The keyboard isn't connected".to_string()),

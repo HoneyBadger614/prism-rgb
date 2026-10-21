@@ -272,9 +272,13 @@ pub fn macro_files(profile_dat: &[u8]) -> Vec<String> {
 /* ---------- lighting ----------
  * lghtcnt.cnt: how many lighting entries (u32). Entry n is two files:
  *   lght_nn.d, 13 bytes, as iCUE writes them:
+ *     [effect, speed, mode, 00, 00, red, green, blue, ff, red, green, blue, ff]
  *     steady:  07 00 02 00 00, red, green, blue, ff, 00 00 00 00
  *     rainbow: 03 02 00, then zeros
  *     pulse:   01 02 03 00 00, red, green, blue, ff, red, green, blue, ff
+ *              (random colors: 01 02 01, then zeros)
+ *     Speed 02 is iCUE's middle, 03 its fastest (2026-10-21; its slowest
+ *     wasn't captured, so Prism saves slow as middle).
  *   lght_nn.k: a count (u32), then the zones it lights.
  * Zones (checked on the mouse): Logo 0, Scroll wheel 2, Front 3, Back 5.
  * Zone 1 is the DPI light, which always shows the DPI stage's color.
@@ -286,35 +290,51 @@ pub const LIGHT_ZONES: [(&str, u8); 4] = [("Front", 3), ("Scroll wheel", 2), ("L
 /// Lighting files: (file name, contents), the count file last. Zones with
 /// the same light share one entry. Colors are corrected for LEDs here.
 pub fn lighting_files(zones: &[(&str, crate::effects::OnboardLight)]) -> Vec<(String, Vec<u8>)> {
-    use crate::effects::OnboardLight;
-    let mut entries: Vec<(OnboardLight, Vec<u8>)> = Vec::new();
+    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for (name, number) in LIGHT_ZONES {
         let Some(&(_, light)) = zones.iter().find(|(z, _)| *z == name) else { continue };
-        match entries.iter_mut().find(|(l, _)| *l == light) {
+        let d = light_entry(light);
+        match entries.iter_mut().find(|(e, _)| *e == d) {
             Some((_, z)) => z.push(number),
-            None => entries.push((light, vec![number])),
+            None => entries.push((d, vec![number])),
         }
     }
     let mut out = Vec::new();
-    for (n, (light, zones)) in entries.iter().enumerate() {
-        let d = match *light {
-            OnboardLight::Steady(c) => {
-                let c = c.to_led();
-                vec![0x07, 0x00, 0x02, 0x00, 0x00, c.r, c.g, c.b, 0xff, 0, 0, 0, 0]
-            }
-            OnboardLight::Rainbow(_) => vec![0x03, 0x02, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            OnboardLight::Pulse(_, a, b) => {
-                let (a, b) = (a.to_led(), b.to_led());
-                vec![0x01, 0x02, 0x03, 0x00, 0x00, a.r, a.g, a.b, 0xff, b.r, b.g, b.b, 0xff]
-            }
-        };
+    for (n, (d, zones)) in entries.into_iter().enumerate() {
         let mut k = (zones.len() as u32).to_le_bytes().to_vec();
         k.extend(zones);
         out.push((format!("lght_{n:02}.d"), d));
         out.push((format!("lght_{n:02}.k"), k));
     }
-    out.push(("lghtcnt.cnt".into(), (entries.len() as u32).to_le_bytes().to_vec()));
+    out.push(("lghtcnt.cnt".into(), (out.len() as u32 / 2).to_le_bytes().to_vec()));
     out
+}
+
+/// One zone's lght_nn.d. Only steady colors, the rainbow and the pulse
+/// reach the mouse ([`crate::effects::onboard_lights`] gives it no others);
+/// anything else is saved as its first color.
+fn light_entry(light: crate::effects::OnboardLight) -> Vec<u8> {
+    use crate::effects::{OnboardLight, OwnKind};
+    let steady = |c: crate::Rgb| {
+        let c = c.to_led();
+        vec![0x07, 0x00, 0x02, 0x00, 0x00, c.r, c.g, c.b, 0xff, 0, 0, 0, 0]
+    };
+    match light {
+        OnboardLight::Steady(c) => steady(c),
+        OnboardLight::Loop(_, colors, _) => steady(colors[0]),
+        OnboardLight::Own(_, e) => {
+            let speed = if e.speed >= 2 { 0x03 } else { 0x02 };
+            match (e.kind, e.colors) {
+                (OwnKind::Rainbow, _) => vec![0x03, speed, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                (OwnKind::Pulse, None) => vec![0x01, speed, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                (OwnKind::Pulse, Some((a, b))) => {
+                    let (a, b) = (a.to_led(), b.to_led());
+                    vec![0x01, speed, 0x03, 0x00, 0x00, a.r, a.g, a.b, 0xff, b.r, b.g, b.b, 0xff]
+                }
+                (_, colors) => steady(colors.map_or(crate::Rgb::new(0, 0, 0), |c| c.0)),
+            }
+        }
+    }
 }
 
 /// A copy of PROFILE.I with the DPI numbers from `dpi` (sniper and stages
@@ -460,7 +480,7 @@ mod tests {
 
     #[test]
     fn lighting_like_icue() {
-        use crate::effects::OnboardLight::{self, *};
+        use crate::effects::{OnboardLight::{self, *}, OwnEffect, OwnKind};
         use crate::Rgb;
         // iCUE: Logo green, Front blue, Scroll wheel red.
         let f = lighting_files(&[("Front", Steady(Rgb::new(0, 0, 255))), ("Scroll wheel", Steady(Rgb::new(255, 0, 0))), ("Logo", Steady(Rgb::new(0, 255, 0)))]);
@@ -471,14 +491,22 @@ mod tests {
         assert_eq!(f.last().unwrap(), &("lghtcnt.cnt".to_string(), hex("03000000")));
         // iCUE: rainbow on all four zones; pulse red/blue.
         let all = |l: OnboardLight| ["Front", "Scroll wheel", "Logo", "Back"].map(|z| (z, l)).to_vec();
-        let f = lighting_files(&all(Rainbow(0)));
+        let own = |kind, colors, speed| Own(0, OwnEffect { kind, colors, speed, reverse: false });
+        let f = lighting_files(&all(own(OwnKind::Rainbow, None, 1)));
         assert_eq!(f, vec![
             ("lght_00.d".into(), hex("03020000000000000000000000")),
             ("lght_00.k".into(), hex("0400000003020005")),
             ("lghtcnt.cnt".into(), hex("01000000")),
         ]);
-        let f = lighting_files(&all(Pulse(0, Rgb::new(255, 0, 0), Rgb::new(0, 0, 255))));
+        let f = lighting_files(&all(own(OwnKind::Pulse, Some((Rgb::new(255, 0, 0), Rgb::new(0, 0, 255))), 1)));
         assert_eq!(f[0], ("lght_00.d".into(), hex("0102030000ff0000ff0000ffff")));
+        // 2026-10-21: fastest, and random colors.
+        let f = lighting_files(&all(own(OwnKind::Pulse, Some((Rgb::new(255, 0, 0), Rgb::new(0, 0, 255))), 2)));
+        assert_eq!(f[0].1, hex("0103030000ff0000ff0000ffff"));
+        assert_eq!(lighting_files(&all(own(OwnKind::Pulse, None, 2)))[0].1, hex("01030100000000000000000000"));
+        assert_eq!(lighting_files(&all(own(OwnKind::Rainbow, None, 2)))[0].1, hex("03030000000000000000000000"));
+        // Slow is saved as middle.
+        assert_eq!(lighting_files(&all(own(OwnKind::Rainbow, None, 0)))[0].1, hex("03020000000000000000000000"));
     }
 
     fn sample_profile_i() -> Vec<u8> {

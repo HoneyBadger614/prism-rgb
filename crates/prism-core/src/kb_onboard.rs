@@ -414,19 +414,35 @@ pub fn layer_file(color: crate::Rgb, slots: &[u8]) -> Vec<u8> {
     f
 }
 
-/// The keyboard's own rainbow wave on `slots` (default speed).
-pub fn rainbow_layer(slots: &[u8]) -> Vec<u8> {
-    let mut f = vec![0x4c, 0xb9, 0x00, 0x04, 0x04, 0x00, 0x00];
-    f.push(slots.len() as u8);
-    f.extend_from_slice(slots);
-    f
-}
-
-/// The keyboard's own pulse between two colors (already corrected for
-/// LEDs) on `slots` (default speed).
-pub fn pulse_layer(a: crate::Rgb, b: crate::Rgb, slots: &[u8]) -> Vec<u8> {
-    let mut f = vec![0x4f, 0xad, 0x01, 0x04, 0x00, 0x00, 0x02];
-    for c in [a, b] {
+/// One of the keyboard's own effects on `slots`, its colors already
+/// corrected for LEDs: the effect's tag, then [mode, speed, direction,
+/// extra, color count], the colors as [ff, blue, green, red], and the keys.
+/// Mode is 00 for a rainbow, 01 for the colors given, 02 for random ones.
+/// Speeds are 03-05. Directions: 01 down, 02 up, 04 right, 05 left; a
+/// pulse or ripple has none (00). A key glow's speed is in its extra byte
+/// too (iCUE's Duration sets both).
+pub fn own_layer(e: &crate::effects::OwnEffect, slots: &[u8]) -> Vec<u8> {
+    use crate::effects::OwnKind;
+    let across = if e.reverse { 0x05 } else { 0x04 };
+    let (tag, direction) = match e.kind {
+        OwnKind::Rainbow => ([0x4c, 0xb9], across),
+        OwnKind::ColorWave => ([0xff, 0x7b], across),
+        OwnKind::Pulse => ([0x4f, 0xad], 0x00),
+        OwnKind::Rain => ([0x7e, 0xa0], 0x01),
+        OwnKind::Visor => ([0xc0, 0x90], 0x04),
+        OwnKind::Ripple => ([0xa2, 0x09], 0x00),
+        OwnKind::KeyGlow => ([0xf9, 0xb1], 0x00),
+    };
+    let speed = 0x03 + e.speed.min(2);
+    let extra = if e.kind == OwnKind::KeyGlow { speed } else { 0x00 };
+    let (mode, colors) = match e.colors {
+        _ if e.kind == OwnKind::Rainbow => (0x00, vec![]),
+        Some((a, b)) => (0x01, vec![a, b]),
+        None => (0x02, vec![]),
+    };
+    let mut f = tag.to_vec();
+    f.extend_from_slice(&[mode, speed, direction, extra, colors.len() as u8]);
+    for c in colors {
         f.extend_from_slice(&[0xff, c.b, c.g, c.r]);
     }
     f.push(slots.len() as u8);
@@ -434,10 +450,24 @@ pub fn pulse_layer(a: crate::Rgb, b: crate::Rgb, slots: &[u8]) -> Vec<u8> {
     f
 }
 
-/// Layer files for each slot's light, top first: the device's own effects,
-/// then steady colors. Colors are corrected for LEDs here.
-pub fn light_layers(slots: &[(u8, crate::effects::OnboardLight)]) -> Vec<Vec<u8>> {
-    use crate::effects::OnboardLight;
+/// A color loop on `slots`: the colors (already corrected for LEDs) spread
+/// evenly over `tenths` tenths of a second, as iCUE's Custom Gradient.
+pub fn loop_layer(colors: &[crate::Rgb; crate::effects::LOOP_COLORS], tenths: u8, slots: &[u8]) -> Vec<u8> {
+    let mut f = vec![0xf4, 0xeb, 0x01, tenths, 0x00, 0x00, 0x00, 0x00, LAYER_COLORS as u8];
+    for c in colors {
+        f.extend_from_slice(&[0xff, c.b, c.g, c.r]);
+    }
+    f.push(slots.len() as u8);
+    f.extend_from_slice(slots);
+    f
+}
+
+/// Layer files for each slot's light, top first: typing effects (with the
+/// slots each covers), then the device's own effects and color loops, then
+/// steady colors. Colors are corrected for LEDs here.
+pub fn light_layers(slots: &[(u8, crate::effects::OnboardLight)], typing: &[(crate::effects::OwnEffect, Vec<u8>)]) -> Vec<Vec<u8>> {
+    use crate::effects::{OnboardLight, OwnEffect};
+    let led = |e: &OwnEffect| OwnEffect { colors: e.colors.map(|(a, b)| (a.to_led(), b.to_led())), ..*e };
     let mut effects: Vec<(OnboardLight, Vec<u8>)> = Vec::new();
     let mut steady = Vec::new();
     for &(slot, light) in slots {
@@ -449,15 +479,14 @@ pub fn light_layers(slots: &[(u8, crate::effects::OnboardLight)]) -> Vec<Vec<u8>
             },
         }
     }
-    effects.truncate(MAX_LAYERS / 2);
-    let mut out: Vec<Vec<u8>> = effects
-        .iter()
-        .map(|(l, s)| match *l {
-            OnboardLight::Pulse(_, a, b) => pulse_layer(a.to_led(), b.to_led(), s),
-            _ => rainbow_layer(s),
-        })
-        .collect();
-    let room = MAX_LAYERS - out.len();
+    let mut out: Vec<Vec<u8>> = typing.iter().filter(|(_, s)| !s.is_empty()).map(|(e, s)| own_layer(&led(e), s)).collect();
+    effects.truncate((MAX_LAYERS / 2).saturating_sub(out.len()));
+    out.extend(effects.iter().map(|(l, s)| match l {
+        OnboardLight::Own(_, e) => own_layer(&led(e), s),
+        OnboardLight::Loop(_, colors, tenths) => loop_layer(&colors.map(|c| c.to_led()), *tenths, s),
+        OnboardLight::Steady(_) => unreachable!("steady colors are grouped separately"),
+    }));
+    let room = MAX_LAYERS.saturating_sub(out.len());
     out.extend(color_groups(&steady, room).into_iter().map(|(c, s)| layer_file(c, &s)));
     out
 }
@@ -571,15 +600,63 @@ mod tests {
         assert_eq!(p.actions[0], (57, hex("6e07030100000000cd00"), 0x21));
         assert_eq!(p.actions[1], (109, hex("6e07030000000000e900"), 0x61));
         assert_eq!(p.actions[2], (111, hex("6e07030100000000e200"), 0x21));
+    }
+
+    #[test]
+    fn own_effects_match_icue() {
+        use crate::effects::{OwnEffect, OwnKind::*};
+        // Every key, as iCUE saved them (2026-10-16 and 2026-10-21).
         let all: Vec<u8> = hex("291e1f20212223242526272d2b141a0815171c180c12132f39041607090a0b0d0e0f33346a1d1b0619051110363738696c6b2c6f653031282e2a6e6d7a0001");
-        let mut wave = hex("4cb90004040000");
-        wave.push(all.len() as u8);
-        wave.extend(&all);
-        assert_eq!(rainbow_layer(&all), wave);
-        let mut pulse = hex("4fad0104000002ff0000ffffff0000");
-        pulse.push(all.len() as u8);
-        pulse.extend(&all);
-        assert_eq!(pulse_layer(crate::Rgb::new(255, 0, 0), crate::Rgb::new(0, 0, 255), &all), pulse);
+        let with_keys = |head: &str| {
+            let mut f = hex(head);
+            f.push(all.len() as u8);
+            f.extend(&all);
+            f
+        };
+        let red_blue = Some((crate::Rgb::new(255, 0, 0), crate::Rgb::new(0, 0, 255)));
+        let fx = |kind, colors, speed, reverse| own_layer(&OwnEffect { kind, colors, speed, reverse }, &all);
+        assert_eq!(fx(Rainbow, None, 1, false), with_keys("4cb90004040000"));
+        assert_eq!(fx(Rainbow, None, 1, true), with_keys("4cb90004050000"));
+        assert_eq!(fx(Pulse, red_blue, 1, false), with_keys("4fad0104000002ff0000ffffff0000"));
+        assert_eq!(fx(Pulse, None, 1, false), with_keys("4fad0204000000"));
+        assert_eq!(fx(ColorWave, None, 1, false), with_keys("ff7b0204040000"));
+        assert_eq!(fx(ColorWave, red_blue, 2, false), with_keys("ff7b0105040002ff0000ffffff0000"));
+        assert_eq!(fx(ColorWave, red_blue, 0, true), with_keys("ff7b0103050002ff0000ffffff0000"));
+        assert_eq!(fx(Rain, None, 1, false), with_keys("7ea00204010000"));
+        assert_eq!(fx(Rain, red_blue, 1, false), with_keys("7ea00104010002ff0000ffffff0000"));
+        assert_eq!(fx(Visor, red_blue, 1, false), with_keys("c0900104040002ff0000ffffff0000"));
+        assert_eq!(fx(Ripple, None, 1, false), with_keys("a2090204000000"));
+        assert_eq!(fx(Ripple, red_blue, 1, false), with_keys("a2090104000002ff0000ffffff0000"));
+        assert_eq!(fx(KeyGlow, None, 1, false), with_keys("f9b10204000400"));
+        assert_eq!(fx(KeyGlow, red_blue, 1, false), with_keys("f9b10104000402ff0000ffffff0000"));
+        assert_eq!(fx(KeyGlow, None, 0, false), with_keys("f9b10203000300"));
+        assert_eq!(fx(KeyGlow, None, 2, false), with_keys("f9b10205000500"));
+    }
+
+    #[test]
+    fn loops_match_icue_gradient() {
+        use crate::Rgb;
+        // iCUE's Custom Gradient: its first color red, over 1 s, then 2 s.
+        let mut colors = [Rgb::new(0, 0, 255); crate::effects::LOOP_COLORS];
+        colors[0] = Rgb::new(255, 0, 0);
+        let f = loop_layer(&colors, 0x0a, &[0x29, 0x1e]);
+        assert_eq!(&f[..17], &hex("f4eb010a0000000080ff0000ffffff0000")[..]);
+        assert_eq!(&f[f.len() - 3..], &hex("02291e")[..]);
+        assert_eq!(f.len(), 9 + 128 * 4 + 3);
+        assert_eq!(loop_layer(&colors, 0x14, &[])[3], 0x14);
+    }
+
+    #[test]
+    fn typing_layers_come_first() {
+        use crate::effects::{OnboardLight, OwnEffect, OwnKind};
+        let glow = OwnEffect { kind: OwnKind::KeyGlow, colors: None, speed: 1, reverse: false };
+        let rainbow = OnboardLight::Own(0, OwnEffect { kind: OwnKind::Rainbow, colors: None, speed: 1, reverse: false });
+        let red = OnboardLight::Steady(crate::Rgb::new(255, 0, 0));
+        let files = light_layers(&[(1, rainbow), (2, rainbow), (3, red)], &[(glow, vec![1, 2, 3])]);
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0], hex("f9b1020400040003010203"));
+        assert_eq!(files[1], hex("4cb90004040000020102"));
+        assert_eq!(files[2][0], 0x87);
     }
 
     #[test]

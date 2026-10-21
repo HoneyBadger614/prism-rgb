@@ -223,8 +223,8 @@ const Onboard = (() => {
     track.append(el("span", "switch-thumb"));
     light.append(lightBox, track, el("span", "switch-text", "Also save lighting"));
     const lightHint = el("p", "hint", kind === "mouse"
-      ? "Rainbow, Color cycle and Breathe keep moving, using the mouse's own effects (at its normal speed). Everything else is saved as it looks right now. The DPI light keeps showing the DPI stage."
-      : "Rainbow, Color cycle and Breathe keep moving, using the keyboard's own effects (at its normal speed). Everything else is saved as it looks right now, as a still picture.");
+      ? "Rainbow, Color cycle and Breathe keep moving, using the mouse's own effects (Breathe with its first two colors). Everything else is saved as it looks right now. The DPI light keeps showing the DPI stage."
+      : "Breathe, Color cycle, Strobe and Heartbeat play just as they do in Prism. Rainbow, Wave, Rain, Scanner, Typing ripple and Key glow become the keyboard's own versions, using your first two colors. Everything else is saved as it looks right now, as a still picture.");
 
     const save = el("button", "btn", `Save to ${dev}`);
     const cancel = el("button", "mini", "Cancel");

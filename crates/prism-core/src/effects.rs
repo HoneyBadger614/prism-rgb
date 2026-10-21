@@ -572,24 +572,140 @@ impl LightingStore {
     }
 }
 
+/// How many colors a keyboard color loop holds.
+pub const LOOP_COLORS: usize = 128;
+/// Longest color loop saved, in seconds: the keyboard stores the length in
+/// tenths of a second, in one byte (checked up to 2 s).
+const LOOP_MAX: f64 = 25.5;
+
 /// What one LED can show by itself when saved to a device's memory.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OnboardLight {
     /// A steady color (a still picture of the LED).
     Steady(Rgb),
-    /// The device's own rainbow, for the layer at this index.
-    Rainbow(usize),
-    /// The device's own pulse between two colors, for the layer at this index.
-    Pulse(usize, Rgb, Rgb),
+    /// One of the device's own effects, for the layer at this index.
+    Own(usize, OwnEffect),
+    /// For the layer at this index, a loop of colors the keyboard plays by
+    /// itself: [`LOOP_COLORS`] colors spread evenly over the given number
+    /// of tenths of a second.
+    Loop(usize, [Rgb; LOOP_COLORS], u8),
+}
+
+/// An effect a device has built in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OwnEffect {
+    pub kind: OwnKind,
+    /// The two colors it takes turns with; None for random colors (or, for
+    /// a rainbow, none at all).
+    pub colors: Option<(Rgb, Rgb)>,
+    /// 0 slow, 1 middle, 2 fast: the devices have three speeds.
+    pub speed: u8,
+    /// Going left instead of right (waves) or the other way round.
+    pub reverse: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnKind {
+    Rainbow,
+    /// Two colors flowing across (the keyboard's Color wave).
+    ColorWave,
+    Pulse,
+    Rain,
+    /// A bar sweeping back and forth (the keyboard's Visor).
+    Visor,
+    /// Rings from each key press (the keyboard's Type lighting, Ripple).
+    Ripple,
+    /// Each pressed key lighting up (the keyboard's Type lighting, Key).
+    KeyGlow,
+}
+
+/// Which device a saved picture is for, since each plays different effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardDevice {
+    Keyboard,
+    Mouse,
+}
+
+/// Prism's speed (1-10) as one of a device's three.
+fn speed_step(speed: u8) -> u8 {
+    match speed {
+        0..=3 => 0,
+        4..=7 => 1,
+        _ => 2,
+    }
+}
+
+/// How long one full round of a layer takes, for effects that are the same
+/// color everywhere at any moment. None for any other effect.
+fn uniform_period(l: &Layer) -> Option<f64> {
+    let speed = l.speed.max(1) as f64;
+    let turns = (1 + l.palette.len()) as f64;
+    Some(match l.effect {
+        Effect::Breathe => l.stops().len() as f64 / (speed * 0.05),
+        Effect::ColorCycle => 1.0 / (speed * 0.02),
+        Effect::Strobe => turns / (speed * 0.8),
+        Effect::Heartbeat => turns / (speed * 0.2),
+        _ => return None,
+    })
+}
+
+/// A layer whose color is the same everywhere, as a keyboard color loop:
+/// its colors (at `level`) and the loop's length in tenths of a second.
+/// The loop holds as many whole rounds as make its length come out closest
+/// to whole tenths. None if one round is longer than the keyboard can loop.
+fn loop_colors(l: &Layer, surface: &Surface, level: f32) -> Option<([Rgb; LOOP_COLORS], u8)> {
+    let period = uniform_period(l)?;
+    let g = surface.leds.first()?;
+    // At most 8 rounds, so each round still has 16 colors.
+    let (len, tenths) = (1..=8)
+        .map(|k| k as f64 * period)
+        .filter(|len| (0.1..=LOOP_MAX).contains(len))
+        .map(|len| (len, (len * 10.0).round()))
+        .min_by(|a, b| ((a.0 * 10.0 - a.1).abs() / a.0).total_cmp(&((b.0 * 10.0 - b.1).abs() / b.0)))?;
+    let colors = std::array::from_fn(|i| layer_color(l, g, surface, i as f64 * len / LOOP_COLORS as f64, None).scale(level));
+    Some((colors, tenths as u8))
+}
+
+/// What a layer becomes on `device` when it can play it by itself.
+fn own_light(n: usize, l: &Layer, surface: &Surface, master: f32, device: OnboardDevice) -> Option<OnboardLight> {
+    let level = l.brightness as f32 / 100.0 * master;
+    let own = |kind, colors| Some(OnboardLight::Own(n, OwnEffect { kind, colors, speed: speed_step(l.speed), reverse: l.reverse }));
+    let two = Some((l.color1.scale(level), l.color2.scale(level)));
+    // Color 1 and the next color it takes turns with.
+    let turns = Some((l.turn(0).scale(level), l.turn(1).scale(level)));
+    match device {
+        OnboardDevice::Keyboard => {
+            if let Some((colors, tenths)) = loop_colors(l, surface, level) {
+                return Some(OnboardLight::Loop(n, colors, tenths));
+            }
+            match l.effect {
+                // Color cycles too slow to loop get the rainbow instead.
+                Effect::Rainbow | Effect::ColorCycle => own(OwnKind::Rainbow, None),
+                Effect::Breathe => own(OwnKind::Pulse, two),
+                Effect::Wave => own(OwnKind::ColorWave, two),
+                Effect::Rain => own(OwnKind::Rain, turns),
+                Effect::Scanner => own(OwnKind::Visor, turns),
+                _ => None,
+            }
+        }
+        OnboardDevice::Mouse => match l.effect {
+            Effect::Rainbow | Effect::ColorCycle => own(OwnKind::Rainbow, None),
+            Effect::Breathe => own(OwnKind::Pulse, two),
+            _ => None,
+        },
+    }
 }
 
 /// For saving to a device: each LED gets the effect of the topmost layer
-/// over it if the device can play it itself (rainbow, color cycle,
-/// breathe), otherwise its color at `t` seconds.
-pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -> Vec<OnboardLight> {
+/// over it if the device can play it itself, otherwise its color at `t`
+/// seconds. The keyboard plays effects that are one color everywhere
+/// (breathe, color cycle, strobe, heartbeat) as color loops, and has its
+/// own rainbow, wave, rain and visor; the mouse has a rainbow and a pulse.
+pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64, device: OnboardDevice) -> Vec<OnboardLight> {
     let still: Vec<Rgb> = render_layers(layers, surface, master, t).concat();
     let mut top: Vec<Option<usize>> = vec![None; surface.leds.len()];
-    // Ripples can't play without Prism, so they don't count.
+    // Typing effects are drawn over the rest (see [`onboard_typing`]), so
+    // they don't count here.
     for (n, layer) in layers.iter().enumerate().filter(|(_, l)| l.enabled && !l.effect.is_overlay()) {
         match &layer.target {
             Target::All => top.iter_mut().for_each(|t| *t = Some(n)),
@@ -597,19 +713,36 @@ pub fn onboard_lights(layers: &[Layer], surface: &Surface, master: u8, t: f64) -
         }
     }
     let master = master as f32 / 100.0;
-    top.iter()
-        .enumerate()
-        .map(|(i, t)| match t.map(|n| (n, &layers[n])) {
-            Some((n, l)) if matches!(l.effect, Effect::Rainbow | Effect::ColorCycle) => OnboardLight::Rainbow(n),
-            Some((n, l)) if l.effect == Effect::Breathe => {
-                let level = l.brightness as f32 / 100.0 * master;
-                OnboardLight::Pulse(n, l.color1.scale(level), l.color2.scale(level))
-            }
-            _ => OnboardLight::Steady(still[i]),
+    // Worked out once per layer: a color loop renders 128 moments.
+    let own: Vec<Option<OnboardLight>> = layers.iter().enumerate().map(|(n, l)| own_light(n, l, surface, master, device)).collect();
+    top.iter().enumerate().map(|(i, t)| t.and_then(|n| own[n]).unwrap_or(OnboardLight::Steady(still[i]))).collect()
+}
+
+/// For saving to the keyboard: the Typing ripple and Key glow layers, top
+/// first, as the keyboard's own typing effects, each with the LEDs it
+/// covers. (The mouse has none; there, and for the other typing effects,
+/// the layer saves as what it shows with nothing pressed.)
+pub fn onboard_typing(layers: &[Layer], surface: &Surface, master: u8) -> Vec<(OwnEffect, Vec<usize>)> {
+    let master = master as f32 / 100.0;
+    layers
+        .iter()
+        .rev()
+        .filter(|l| l.enabled)
+        .filter_map(|l| {
+            let kind = match l.effect {
+                Effect::Ripple => OwnKind::Ripple,
+                Effect::KeyGlow => OwnKind::KeyGlow,
+                _ => return None,
+            };
+            let level = l.brightness as f32 / 100.0 * master;
+            let colors = (!l.random).then(|| (l.turn(0).scale(level), l.turn(1).scale(level)));
+            let leds = match &l.target {
+                Target::All => (0..surface.leds.len()).collect(),
+                Target::Leds { leds } => leds.iter().filter_map(|r| surface.index(*r)).collect(),
+            };
+            Some((OwnEffect { kind, colors, speed: speed_step(l.speed), reverse: false }, leds))
         })
         .collect()
-    // (A ripple layer saves as its background color: it can't react to
-    // typing without Prism.)
 }
 
 /// One key press spreading out: when (in effect seconds) and where, on the
@@ -1078,6 +1211,8 @@ mod tests {
     use super::*;
 
     const WHITE: Rgb = Rgb::new(255, 255, 255);
+    const RED: Rgb = Rgb::new(255, 0, 0);
+    const BLUE: Rgb = Rgb::new(0, 0, 255);
 
     fn three_fans() -> Vec<ChannelLayout> {
         vec![ChannelLayout::ll_fans(3), ChannelLayout::ll_fans(0)]
@@ -1267,9 +1402,54 @@ mod tests {
         let base = Layer { effect: Effect::Rainbow, ..Default::default() };
         let pulse = Layer { effect: Effect::Breathe, target: Target::Leds { leds: vec![LedRef(0, 1)] }, ..Default::default() };
         let fixed = Layer { effect: Effect::Static, color1: WHITE, target: Target::Leds { leds: vec![LedRef(0, 2)] }, ..Default::default() };
-        let l = onboard_lights(&[base, pulse, fixed], &kb, 100, 0.0);
-        assert_eq!(l, vec![OnboardLight::Rainbow(0), OnboardLight::Pulse(1, PURPLE, HOT_PINK), OnboardLight::Steady(WHITE)]);
-        assert_eq!(onboard_lights(&[], &kb, 100, 0.0)[0], OnboardLight::Steady(BLACK));
+        let l = onboard_lights(&[base.clone(), pulse.clone(), fixed.clone()], &kb, 100, 0.0, OnboardDevice::Mouse);
+        let own = |kind, colors| OwnEffect { kind, colors, speed: 1, reverse: false };
+        assert_eq!(l, vec![
+            OnboardLight::Own(0, own(OwnKind::Rainbow, None)),
+            OnboardLight::Own(1, own(OwnKind::Pulse, Some((PURPLE, HOT_PINK)))),
+            OnboardLight::Steady(WHITE),
+        ]);
+        assert_eq!(onboard_lights(&[], &kb, 100, 0.0, OnboardDevice::Mouse)[0], OnboardLight::Steady(BLACK));
+        // The keyboard loops the breath instead.
+        let l = onboard_lights(&[base, pulse, fixed], &kb, 100, 0.0, OnboardDevice::Keyboard);
+        assert!(matches!(l[1], OnboardLight::Loop(1, _, _)), "{:?}", l[1]);
+    }
+
+    #[test]
+    fn uniform_effects_loop_whole_rounds() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0)]);
+        // Breathe at speed 5, two colors: 4 s a breath, 8 s for both.
+        let breathe = Layer { effect: Effect::Breathe, color1: RED, color2: BLUE, ..Default::default() };
+        let (colors, tenths) = loop_colors(&breathe, &kb, 1.0).unwrap();
+        assert_eq!(tenths, 80);
+        // Dark at the start of each breath, red at the top of the first,
+        // blue at the top of the second.
+        assert_eq!((colors[0], colors[32], colors[96]), (BLACK, RED, BLUE));
+        // A quarter-second strobe is looped twice, to make whole tenths.
+        let strobe = Layer { effect: Effect::Strobe, speed: 5, ..Default::default() };
+        assert_eq!(loop_colors(&strobe, &kb, 1.0).unwrap().1, 5);
+        // Too slow to loop: color cycle at speed 1 takes 50 s.
+        let slow = Layer { effect: Effect::ColorCycle, speed: 1, ..Default::default() };
+        assert!(loop_colors(&slow, &kb, 1.0).is_none());
+        assert_eq!(onboard_lights(&[slow], &kb, 100, 0.0, OnboardDevice::Keyboard)[0], OnboardLight::Own(0, OwnEffect { kind: OwnKind::Rainbow, colors: None, speed: 0, reverse: false }));
+        // Waves keep their direction; spatial effects with no match stay still.
+        let wave = Layer { effect: Effect::Wave, reverse: true, speed: 9, ..Default::default() };
+        let fire = Layer { effect: Effect::Fire, target: Target::Leds { leds: vec![LedRef(0, 1)] }, ..Default::default() };
+        let l = onboard_lights(&[wave, fire], &kb, 100, 0.0, OnboardDevice::Keyboard);
+        assert_eq!(l[0], OnboardLight::Own(0, OwnEffect { kind: OwnKind::ColorWave, colors: Some((PURPLE, HOT_PINK)), speed: 2, reverse: true }));
+        assert!(matches!(l[1], OnboardLight::Steady(_)));
+    }
+
+    #[test]
+    fn typing_layers_go_on_top() {
+        let kb = Surface::grid(&[(0.0, 0.0), (1.0, 0.0)]);
+        let ripple = Layer { effect: Effect::Ripple, random: true, ..Default::default() };
+        let glow = Layer { effect: Effect::KeyGlow, color1: RED, palette: vec![BLUE], target: Target::Leds { leds: vec![LedRef(0, 1)] }, ..Default::default() };
+        let t = onboard_typing(&[Layer::default(), ripple, glow], &kb, 100);
+        assert_eq!(t, vec![
+            (OwnEffect { kind: OwnKind::KeyGlow, colors: Some((RED, BLUE)), speed: 1, reverse: false }, vec![1]),
+            (OwnEffect { kind: OwnKind::Ripple, colors: None, speed: 1, reverse: false }, vec![0, 1]),
+        ]);
     }
 
     #[test]
